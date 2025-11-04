@@ -5,19 +5,24 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"time"
+)
+
+const (
+	// globalMigrationLockKey is the advisory lock key used for all migrations
+	// across all apps. This ensures only one migration process runs at a time,
+	// preventing race conditions when multiple services start simultaneously.
+	globalMigrationLockKey = 7592348109 // Arbitrary constant
 )
 
 // Postgres handles PostgreSQL migrations
 type Postgres struct {
-	db     *sql.DB
-	app    string
-	lockID string
+	db  *sql.DB
+	app string
 }
 
 // NewPostgres creates a Postgres migrator
-func NewPostgres(db *sql.DB, app, lockID string) *Postgres {
-	return &Postgres{db: db, app: app, lockID: lockID}
+func NewPostgres(db *sql.DB, app string) *Postgres {
+	return &Postgres{db: db, app: app}
 }
 
 // Setup ensures migration tables exist (idempotent)
@@ -30,15 +35,6 @@ func (p *Postgres) Setup(ctx context.Context) error {
 			name TEXT NOT NULL,
 			migrated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 			UNIQUE(app, database, name)
-		);
-		CREATE TABLE IF NOT EXISTS public.migration_locks (
-			id BIGSERIAL PRIMARY KEY,
-			app TEXT NOT NULL,
-			database TEXT NOT NULL,
-			locked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			locked_by TEXT NOT NULL,
-			expires_at TIMESTAMPTZ NOT NULL,
-			UNIQUE(app, database)
 		);
 	`)
 	return err
@@ -65,49 +61,29 @@ func (p *Postgres) Applied(ctx context.Context) ([]string, error) {
 	return names, rows.Err()
 }
 
-// Lock acquires the migration lock (waits if needed)
+// Lock acquires a global advisory lock for migrations
+// This blocks until the lock is available (no polling needed)
+// The lock is automatically released when the connection closes
 func (p *Postgres) Lock(ctx context.Context) error {
-	for i := 0; i < maxRetries; i++ {
-		var lockedBy string
-		var expiresAt time.Time
-		err := p.db.QueryRowContext(ctx,
-			`SELECT locked_by, expires_at FROM public.migration_locks
-			 WHERE app = $1 AND database = $2 ORDER BY locked_at DESC LIMIT 1`,
-			p.app, postgresDriver).Scan(&lockedBy, &expiresAt)
-
-		if err == sql.ErrNoRows || (err == nil && time.Now().After(expiresAt)) {
-			result, err := p.db.ExecContext(ctx,
-				`INSERT INTO public.migration_locks (app, database, locked_by, expires_at)
-				 VALUES ($1, $2, $3, $4)
-				 ON CONFLICT (app, database) DO UPDATE
-				 SET locked_by = $3, locked_at = NOW(), expires_at = $4
-				 WHERE migration_locks.expires_at < NOW()`,
-				p.app, postgresDriver, p.lockID, time.Now().Add(lockTTL))
-			if err != nil {
-				return err
-			}
-			if n, _ := result.RowsAffected(); n > 0 {
-				return nil
-			}
-		} else if err != nil {
-			return err
-		}
-
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(retryDelay):
-		}
+	_, err := p.db.ExecContext(ctx, `SELECT pg_advisory_lock($1)`, globalMigrationLockKey)
+	if err != nil {
+		return fmt.Errorf("acquire global migration advisory lock: %w", err)
 	}
-	return fmt.Errorf("lock timeout")
+	return nil
 }
 
-// Unlock releases the migration lock
+// Unlock releases the global advisory lock
 func (p *Postgres) Unlock(ctx context.Context) error {
-	_, err := p.db.ExecContext(ctx,
-		`DELETE FROM public.migration_locks WHERE app = $1 AND database = $2 AND locked_by = $3`,
-		p.app, postgresDriver, p.lockID)
-	return err
+	var unlocked bool
+	err := p.db.QueryRowContext(ctx,
+		`SELECT pg_advisory_unlock($1)`, globalMigrationLockKey).Scan(&unlocked)
+	if err != nil {
+		return fmt.Errorf("release global migration advisory lock: %w", err)
+	}
+	if !unlocked {
+		return fmt.Errorf("advisory lock was not held")
+	}
+	return nil
 }
 
 // Apply applies a single migration
@@ -178,47 +154,47 @@ func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) 
 		return err
 	}
 
-    // Normal path: tables exist, check what needs to be applied
-    var toApply []Migration
-    for _, mig := range migrations {
-        if !contains(applied, Prefix(mig.Name)) {
-            toApply = append(toApply, mig)
-        }
-    }
+	// Normal path: tables exist, check what needs to be applied
+	var toApply []Migration
+	for _, mig := range migrations {
+		if !contains(applied, Prefix(mig.Name)) {
+			toApply = append(toApply, mig)
+		}
+	}
 
-    if len(toApply) == 0 {
-        return nil // Nothing to do, no lock needed
-    }
+	if len(toApply) == 0 {
+		return nil // Nothing to do, no lock needed
+	}
 
-    // Acquire lock only when we have work to do
-    if err := p.Lock(ctx); err != nil {
-        return err
-    }
-    defer p.Unlock(ctx)
+	// Acquire lock only when we have work to do
+	if err := p.Lock(ctx); err != nil {
+		return err
+	}
+	defer p.Unlock(ctx)
 
-    // Double-check under lock in case another process applied some since our first read
-    applied, err = p.Applied(ctx)
-    if err != nil {
-        return err
-    }
-    toApply = toApply[:0]
-    for _, mig := range migrations {
-        if !contains(applied, Prefix(mig.Name)) {
-            toApply = append(toApply, mig)
-        }
-    }
-    if len(toApply) == 0 {
-        return nil
-    }
+	// Double-check under lock in case another process applied some since our first read
+	applied, err = p.Applied(ctx)
+	if err != nil {
+		return err
+	}
+	toApply = toApply[:0]
+	for _, mig := range migrations {
+		if !contains(applied, Prefix(mig.Name)) {
+			toApply = append(toApply, mig)
+		}
+	}
+	if len(toApply) == 0 {
+		return nil
+	}
 
-    // Apply migrations
-    for _, mig := range toApply {
-        if err := p.Apply(ctx, mig); err != nil {
-            return err
-        }
-    }
+	// Apply migrations
+	for _, mig := range toApply {
+		if err := p.Apply(ctx, mig); err != nil {
+			return err
+		}
+	}
 
-    return nil
+	return nil
 }
 
 // ValidateAllApplied checks if all provided migrations have been applied.

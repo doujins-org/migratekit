@@ -115,7 +115,7 @@ type MigrationSource struct {
 }
 
 // DefaultLockID returns a default lock identifier based on hostname (or PID as fallback).
-// This is useful for preventing concurrent migrations from the same host.
+// This is used by ClickHouse migrations. Postgres migrations use a global advisory lock instead.
 func DefaultLockID() string {
 	hostname, err := os.Hostname()
 	if err != nil || hostname == "" {
@@ -133,7 +133,7 @@ func ValidatePostgresMigrations(ctx context.Context, db *sql.DB, sources ...Migr
 			return fmt.Errorf("failed to load %s migrations: %w", source.App, err)
 		}
 
-		migrator := NewPostgres(db, source.App, "validator")
+		migrator := NewPostgres(db, source.App)
 		if err := migrator.ValidateAllApplied(ctx, migrations); err != nil {
 			return fmt.Errorf("%s migrations not applied: %w", source.App, err)
 		}

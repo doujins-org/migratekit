@@ -160,13 +160,16 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 	}
 
 	// Create schema_migration_locks table
+	// Note: Uses a global lock (lock_name='global') so only ONE app can migrate at a time
+	// The 'app' field records which app acquired the lock (for debugging)
 	return c.exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migration_locks (
+			lock_name String,
 			app String,
 			locked_at DateTime DEFAULT now(),
 			locked_by String,
 			expires_at DateTime
-		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY app
+		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY lock_name
 	`)
 }
 
@@ -181,27 +184,30 @@ func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
 	return rows, nil
 }
 
-// Lock acquires migration lock
+// Lock acquires a global database-wide migration lock
+// All apps share the same lock (lock_name='global') to prevent concurrent migrations
 func (c *ClickHouse) Lock(ctx context.Context) error {
 	for i := 0; i < maxRetries; i++ {
-		sql := fmt.Sprintf(`SELECT locked_by, expires_at FROM schema_migration_locks
-			WHERE app = '%s' ORDER BY locked_at DESC LIMIT 1`,
-			strings.ReplaceAll(c.app, "'", "''"))
+		// Check global lock (not per-app)
+		sql := `SELECT app, locked_by, expires_at FROM schema_migration_locks
+			WHERE lock_name = 'global' ORDER BY locked_at DESC LIMIT 1`
 		rows, _ := c.query(ctx, sql)
 
 		canAcquire := len(rows) == 0
 		if len(rows) > 0 {
 			parts := strings.Split(rows[0], "\t")
-			if len(parts) >= 2 {
-				if t, err := time.Parse("2006-01-02 15:04:05", parts[1]); err == nil && time.Now().After(t) {
+			// parts[0] = app, parts[1] = locked_by, parts[2] = expires_at
+			if len(parts) >= 3 {
+				if t, err := time.Parse("2006-01-02 15:04:05", parts[2]); err == nil && time.Now().After(t) {
 					canAcquire = true
 				}
 			}
 		}
 
 		if canAcquire {
-			sql := fmt.Sprintf(`INSERT INTO schema_migration_locks (app, locked_by, locked_at, expires_at)
-				VALUES ('%s', '%s', now(), '%s')`,
+			// Acquire global lock, but record which app acquired it
+			sql := fmt.Sprintf(`INSERT INTO schema_migration_locks (lock_name, app, locked_by, locked_at, expires_at)
+				VALUES ('global', '%s', '%s', now(), '%s')`,
 				strings.ReplaceAll(c.app, "'", "''"),
 				strings.ReplaceAll(c.lockID, "'", "''"),
 				time.Now().Add(lockTTL).Format("2006-01-02 15:04:05"))
@@ -220,9 +226,10 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 	return fmt.Errorf("lock timeout")
 }
 
-// Unlock releases lock
+// Unlock releases the global lock
 func (c *ClickHouse) Unlock(ctx context.Context) error {
-	sql := fmt.Sprintf("DELETE FROM schema_migration_locks WHERE app = '%s' AND locked_by = '%s'",
+	// Delete global lock where this app/lockID acquired it
+	sql := fmt.Sprintf("DELETE FROM schema_migration_locks WHERE lock_name = 'global' AND app = '%s' AND locked_by = '%s'",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(c.lockID, "'", "''"))
 	return c.exec(ctx, sql)
