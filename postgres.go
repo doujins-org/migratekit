@@ -130,6 +130,42 @@ func (p *Postgres) Apply(ctx context.Context, m Migration) error {
 	return tx.Commit()
 }
 
+// ApplyMigrations applies all unapplied migrations (only locks if needed)
+func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) error {
+	// Check what's already applied (no lock needed)
+	applied, err := p.Applied(ctx)
+	if err != nil {
+		return err
+	}
+
+	// Filter to only unapplied migrations
+	var toApply []Migration
+	for _, mig := range migrations {
+		if !contains(applied, prefix(mig.Name)) {
+			toApply = append(toApply, mig)
+		}
+	}
+
+	if len(toApply) == 0 {
+		return nil // Nothing to do, no lock needed
+	}
+
+	// Acquire lock only when we have work to do
+	if err := p.Lock(ctx); err != nil {
+		return err
+	}
+	defer p.Unlock(ctx)
+
+	// Apply migrations
+	for _, mig := range toApply {
+		if err := p.Apply(ctx, mig); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Close closes the database connection
 func (p *Postgres) Close() error {
 	return p.db.Close()

@@ -29,6 +29,16 @@ func prefix(name string) string {
 	return name
 }
 
+// contains checks if a string is in a slice
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
 // splitSQL splits SQL into statements, removing comments
 func splitSQL(sql string) []string {
 	sql = strings.ReplaceAll(sql, "\r\n", "\n")
