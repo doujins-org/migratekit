@@ -1,80 +1,68 @@
 package migratekit
 
 import (
-	"context"
-	"fmt"
-	"os"
 	"strings"
 	"time"
 )
 
-// Common constants
 const (
-	// LockTTL is how long a migration lock is valid before it expires
-	LockTTL = 5 * time.Minute
-
-	// MaxLockWaitAttempts is the maximum number of times to retry acquiring a lock
-	MaxLockWaitAttempts = 40 // 40 attempts * 5 seconds = 200 seconds max wait
-
-	// LockRetryDelay is how long to wait between lock acquisition attempts
-	LockRetryDelay = 5 * time.Second
+	lockTTL        = 5 * time.Minute
+	maxRetries     = 40
+	retryDelay     = 5 * time.Second
+	postgresDriver = "postgres"
+	clickhouseDriver = "clickhouse"
 )
 
-// Migration represents a single migration file
+// Migration is a single SQL migration
 type Migration struct {
-	Name    string // Full filename (e.g., "001_create_users.up.sql")
-	Content string // SQL content
+	Name    string
+	Content string
 }
 
-// Migrator is the common interface for all database migrators
-type Migrator interface {
-	// AcquireLock attempts to acquire the migration lock with retry logic
-	AcquireLock(ctx context.Context) error
-
-	// ReleaseLock releases the migration lock
-	ReleaseLock(ctx context.Context) error
-
-	// GetAppliedMigrations returns a list of already-applied migration names (numeric prefixes)
-	GetAppliedMigrations(ctx context.Context) ([]string, error)
-
-	// ApplyMigration applies a single migration
-	ApplyMigration(ctx context.Context, migration Migration) error
-
-	// Close closes any underlying connections
-	Close() error
-}
-
-// ExtractNumericPrefix extracts the numeric prefix from a migration filename
-// e.g., "001_create_users.up.sql" -> "001"
-func ExtractNumericPrefix(filename string) string {
-	// Remove .up.sql or .down.sql suffix
-	name := strings.TrimSuffix(filename, ".up.sql")
+// prefix extracts "001" from "001_create_users.up.sql"
+func prefix(name string) string {
+	name = strings.TrimSuffix(name, ".up.sql")
 	name = strings.TrimSuffix(name, ".down.sql")
-
-	// Find the first underscore
-	if idx := strings.IndexByte(name, '_'); idx > 0 {
-		return name[:idx]
+	if i := strings.IndexByte(name, '_'); i > 0 {
+		return name[:i]
 	}
-
-	// No underscore found, return the whole name (might already be numeric)
 	return name
 }
 
-// GetLockID generates a lock identifier for the current process
-// Returns hostname or pid-based identifier
-func GetLockID() string {
-	lockID, err := os.Hostname()
-	if err != nil || lockID == "" {
-		lockID = fmt.Sprintf("pid-%d", os.Getpid())
-	}
-	return lockID
-}
+// splitSQL splits SQL into statements, removing comments
+func splitSQL(sql string) []string {
+	sql = strings.ReplaceAll(sql, "\r\n", "\n")
+	sql = strings.ReplaceAll(sql, "\r", "\n")
 
-// GetAppName returns the app name from environment or a default
-func GetAppName(defaultName string) string {
-	appName := os.Getenv("APP_NAME")
-	if appName == "" {
-		appName = defaultName
+	// Remove block comments
+	for {
+		if i := strings.Index(sql, "/*"); i >= 0 {
+			if j := strings.Index(sql[i+2:], "*/"); j >= 0 {
+				sql = sql[:i] + sql[i+j+4:]
+			} else {
+				sql = sql[:i]
+				break
+			}
+		} else {
+			break
+		}
 	}
-	return appName
+
+	// Remove line comments
+	var b strings.Builder
+	for _, line := range strings.Split(sql, "\n") {
+		if t := strings.TrimSpace(line); !strings.HasPrefix(t, "--") && t != "" {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+
+	// Split by semicolon
+	var out []string
+	for _, stmt := range strings.Split(b.String(), ";") {
+		if s := strings.TrimSpace(stmt); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

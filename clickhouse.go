@@ -10,368 +10,217 @@ import (
 	"time"
 )
 
-// ClickHouseMigrator handles ClickHouse migrations using HTTP interface
-type ClickHouseMigrator struct {
-	Client    *http.Client
-	ServerURL string
-	Database  string
-	Username  string
-	Password  string
-	AppName   string
-	LockID    string
+// ClickHouse handles ClickHouse migrations via HTTP
+type ClickHouse struct {
+	client *http.Client
+	url    string
+	db     string
+	user   string
+	pass   string
+	app    string
+	lockID string
 }
 
-// NewClickHouseMigrator creates a new ClickHouse migrator
-func NewClickHouseMigrator(serverURL, database, username, password, appName string) *ClickHouseMigrator {
-	return &ClickHouseMigrator{
-		Client:    &http.Client{Timeout: 30 * time.Second},
-		ServerURL: strings.TrimSuffix(serverURL, "/"),
-		Database:  database,
-		Username:  username,
-		Password:  password,
-		AppName:   appName,
-		LockID:    GetLockID(),
+// NewClickHouse creates a ClickHouse migrator
+func NewClickHouse(serverURL, database, user, pass, app, lockID string) *ClickHouse {
+	return &ClickHouse{
+		client: &http.Client{Timeout: 30 * time.Second},
+		url:    strings.TrimSuffix(serverURL, "/"),
+		db:     database,
+		user:   user,
+		pass:   pass,
+		app:    app,
+		lockID: lockID,
 	}
 }
 
-// Close closes any underlying connections (no-op for ClickHouse HTTP client)
-func (m *ClickHouseMigrator) Close() error {
-	return nil
-}
-
-// ExecuteSQL executes a SQL query against ClickHouse
-func (m *ClickHouseMigrator) ExecuteSQL(ctx context.Context, query string) error {
-	endpoint := m.ServerURL
-	// Always request to wait for end-of-query before sending HTTP headers
-	if strings.Contains(endpoint, "?") {
-		endpoint += "&wait_end_of_query=1"
-	} else {
-		endpoint += "?wait_end_of_query=1"
-	}
-	if m.Database != "" {
-		endpoint += "&database=" + url.QueryEscape(m.Database)
+// exec executes SQL
+func (c *ClickHouse) exec(ctx context.Context, sql string) error {
+	endpoint := c.url + "?wait_end_of_query=1"
+	if c.db != "" {
+		endpoint += "&database=" + url.QueryEscape(c.db)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(query))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(sql))
 	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
+		return err
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	if c.user != "" || c.pass != "" {
+		req.SetBasicAuth(c.user, c.pass)
 	}
 
-	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if m.Username != "" || m.Password != "" {
-		req.SetBasicAuth(m.Username, m.Password)
-	}
-
-	resp, err := m.Client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to execute query: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		bodyStr := strings.TrimSpace(string(body))
-		if bodyStr != "" {
-			return fmt.Errorf("ClickHouse returned status %d: %s", resp.StatusCode, bodyStr)
-		}
-		return fmt.Errorf("ClickHouse returned status %d", resp.StatusCode)
+		return fmt.Errorf("clickhouse: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-
 	return nil
 }
 
-// QueryStrings executes a SELECT and returns the first column as []string
-func (m *ClickHouseMigrator) QueryStrings(ctx context.Context, query string) ([]string, error) {
-	endpoint := m.ServerURL
-	if strings.Contains(endpoint, "?") {
-		endpoint += "&wait_end_of_query=1"
-	} else {
-		endpoint += "?wait_end_of_query=1"
-	}
-	if m.Database != "" {
-		endpoint += "&database=" + url.QueryEscape(m.Database)
+// query returns first column as strings
+func (c *ClickHouse) query(ctx context.Context, sql string) ([]string, error) {
+	endpoint := c.url + "?wait_end_of_query=1"
+	if c.db != "" {
+		endpoint += "&database=" + url.QueryEscape(c.db)
 	}
 
-	q := strings.TrimSpace(query)
-	if !strings.Contains(strings.ToUpper(q), "FORMAT ") {
-		if strings.HasSuffix(q, ";") {
-			q = strings.TrimSuffix(q, ";")
-		}
-		q += " FORMAT TabSeparated"
+	sql = strings.TrimSpace(sql)
+	if !strings.Contains(strings.ToUpper(sql), "FORMAT") {
+		sql = strings.TrimSuffix(sql, ";") + " FORMAT TabSeparated"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(q))
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(sql))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+		return nil, err
 	}
-	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if m.Username != "" || m.Password != "" {
-		req.SetBasicAuth(m.Username, m.Password)
+	req.Header.Set("Content-Type", "text/plain")
+	if c.user != "" || c.pass != "" {
+		req.SetBasicAuth(c.user, c.pass)
 	}
 
-	resp, err := m.Client.Do(req)
+	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to execute query: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
-		bodyStr := strings.TrimSpace(string(body))
-		if bodyStr != "" {
-			return nil, fmt.Errorf("ClickHouse returned status %d: %s", resp.StatusCode, bodyStr)
-		}
-		return nil, fmt.Errorf("ClickHouse returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("clickhouse: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, err
 	}
+
 	var out []string
 	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		// Only first column is needed; TabSeparated means columns are split by '\t'
-		if idx := strings.IndexByte(line, '\t'); idx >= 0 {
-			out = append(out, line[:idx])
-		} else {
-			out = append(out, line)
+		if line = strings.TrimSpace(line); line != "" {
+			if i := strings.IndexByte(line, '\t'); i >= 0 {
+				out = append(out, line[:i])
+			} else {
+				out = append(out, line)
+			}
 		}
 	}
 	return out, nil
 }
 
-// EnsureDatabase ensures the target database exists
-func (m *ClickHouseMigrator) EnsureDatabase(ctx context.Context) error {
-	if m.Database == "" {
-		return nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", m.ServerURL, strings.NewReader(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", m.Database)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
-	if m.Username != "" || m.Password != "" {
-		req.SetBasicAuth(m.Username, m.Password)
-	}
-	resp, err := m.Client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to create database: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		bodyStr := strings.TrimSpace(string(body))
-		if bodyStr != "" {
-			return fmt.Errorf("ClickHouse returned status %d while creating database: %s", resp.StatusCode, bodyStr)
+// Setup ensures database and tables exist
+func (c *ClickHouse) Setup(ctx context.Context) error {
+	if c.db != "" {
+		req, _ := http.NewRequestWithContext(ctx, "POST", c.url,
+			strings.NewReader(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", c.db)))
+		req.Header.Set("Content-Type", "text/plain")
+		if c.user != "" || c.pass != "" {
+			req.SetBasicAuth(c.user, c.pass)
 		}
-		return fmt.Errorf("ClickHouse returned status %d while creating database", resp.StatusCode)
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode != 200 {
+			return fmt.Errorf("create database: %d", resp.StatusCode)
+		}
 	}
-	return nil
-}
 
-// InitMigrationTable creates the migration tracking tables
-func (m *ClickHouseMigrator) InitMigrationTable(ctx context.Context) error {
-	migrationsTable := `
+	return c.exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			app String,
 			name String,
 			migrated_at DateTime DEFAULT now()
-		)
-		ENGINE = ReplacingMergeTree(migrated_at)
-		ORDER BY (app, name)`
+		) ENGINE = ReplacingMergeTree(migrated_at) ORDER BY (app, name);
 
-	if err := m.ExecuteSQL(ctx, migrationsTable); err != nil {
-		return fmt.Errorf("failed to create schema_migrations table: %w", err)
-	}
-
-	locksTable := `
 		CREATE TABLE IF NOT EXISTS schema_migration_locks (
 			app String,
 			locked_at DateTime DEFAULT now(),
 			locked_by String,
 			expires_at DateTime
-		)
-		ENGINE = ReplacingMergeTree(locked_at)
-		ORDER BY app`
-
-	if err := m.ExecuteSQL(ctx, locksTable); err != nil {
-		return fmt.Errorf("failed to create schema_migration_locks table: %w", err)
-	}
-
-	return nil
+		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY app;
+	`)
 }
 
-// GetAppliedMigrations returns list of applied migration names for this app
-func (m *ClickHouseMigrator) GetAppliedMigrations(ctx context.Context) ([]string, error) {
-	query := fmt.Sprintf("SELECT name FROM schema_migrations WHERE app = '%s' ORDER BY name",
-		strings.ReplaceAll(m.AppName, "'", "''"))
-	rows, err := m.QueryStrings(ctx, query)
+// Applied returns list of applied migrations
+func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
+	sql := fmt.Sprintf("SELECT name FROM schema_migrations WHERE app = '%s' ORDER BY name",
+		strings.ReplaceAll(c.app, "'", "''"))
+	rows, err := c.query(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
 
-// AcquireLock attempts to acquire the migration lock with retry logic
-func (m *ClickHouseMigrator) AcquireLock(ctx context.Context) error {
-	for attempt := 1; attempt <= MaxLockWaitAttempts; attempt++ {
-		// Check for existing lock
-		query := fmt.Sprintf(`
-			SELECT locked_by, expires_at
-			FROM schema_migration_locks
-			WHERE app = '%s'
-			ORDER BY locked_at DESC
-			LIMIT 1`,
-			strings.ReplaceAll(m.AppName, "'", "''"))
+// Lock acquires migration lock
+func (c *ClickHouse) Lock(ctx context.Context) error {
+	for i := 0; i < maxRetries; i++ {
+		sql := fmt.Sprintf(`SELECT locked_by, expires_at FROM schema_migration_locks
+			WHERE app = '%s' ORDER BY locked_at DESC LIMIT 1`,
+			strings.ReplaceAll(c.app, "'", "''"))
+		rows, _ := c.query(ctx, sql)
 
-		rows, err := m.QueryStrings(ctx, query)
-		if err != nil {
-			// Table might not exist yet, try to acquire
-			rows = []string{}
-		}
-
-		now := time.Now()
-		canAcquire := false
-
-		if len(rows) == 0 {
-			canAcquire = true
-		} else {
-			// Parse the lock info: "locked_by\texpires_at"
+		canAcquire := len(rows) == 0
+		if len(rows) > 0 {
 			parts := strings.Split(rows[0], "\t")
 			if len(parts) >= 2 {
-				expiresAt, parseErr := time.Parse("2006-01-02 15:04:05", parts[1])
-				if parseErr == nil && now.After(expiresAt) {
+				if t, err := time.Parse("2006-01-02 15:04:05", parts[1]); err == nil && time.Now().After(t) {
 					canAcquire = true
-					fmt.Printf("ClickHouse migration lock expired (was held by %s), acquiring...\n", parts[0])
 				}
 			}
 		}
 
 		if canAcquire {
-			expiresAt := now.Add(LockTTL).Format("2006-01-02 15:04:05")
-			insertLock := fmt.Sprintf(`
-				INSERT INTO schema_migration_locks (app, locked_by, locked_at, expires_at)
+			sql := fmt.Sprintf(`INSERT INTO schema_migration_locks (app, locked_by, locked_at, expires_at)
 				VALUES ('%s', '%s', now(), '%s')`,
-				strings.ReplaceAll(m.AppName, "'", "''"),
-				strings.ReplaceAll(m.LockID, "'", "''"),
-				expiresAt)
-
-			if err := m.ExecuteSQL(ctx, insertLock); err != nil {
-				return fmt.Errorf("failed to insert migration lock: %w", err)
+				strings.ReplaceAll(c.app, "'", "''"),
+				strings.ReplaceAll(c.lockID, "'", "''"),
+				time.Now().Add(lockTTL).Format("2006-01-02 15:04:05"))
+			if err := c.exec(ctx, sql); err != nil {
+				return err
 			}
-
-			fmt.Printf("✓ Acquired ClickHouse migration lock for app=%s (lock_id=%s)\n", m.AppName, m.LockID)
 			return nil
-		}
-
-		// Lock is held, wait and retry
-		if attempt == 1 {
-			fmt.Printf("ClickHouse migration lock for app=%s is held by another instance, waiting...\n", m.AppName)
 		}
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for migration lock: %w", ctx.Err())
-		case <-time.After(LockRetryDelay):
-			// Continue to next attempt
+			return ctx.Err()
+		case <-time.After(retryDelay):
+		}
+	}
+	return fmt.Errorf("lock timeout")
+}
+
+// Unlock releases lock
+func (c *ClickHouse) Unlock(ctx context.Context) error {
+	sql := fmt.Sprintf("DELETE FROM schema_migration_locks WHERE app = '%s' AND locked_by = '%s'",
+		strings.ReplaceAll(c.app, "'", "''"),
+		strings.ReplaceAll(c.lockID, "'", "''"))
+	return c.exec(ctx, sql)
+}
+
+// Apply applies a migration
+func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
+	for _, stmt := range splitSQL(m.Content) {
+		if err := c.exec(ctx, stmt); err != nil {
+			return err
 		}
 	}
 
-	return fmt.Errorf("timed out waiting for ClickHouse migration lock after %d attempts", MaxLockWaitAttempts)
+	sql := fmt.Sprintf("INSERT INTO schema_migrations (app, name) VALUES ('%s', '%s')",
+		strings.ReplaceAll(c.app, "'", "''"),
+		strings.ReplaceAll(prefix(m.Name), "'", "''"))
+	return c.exec(ctx, sql)
 }
 
-// ReleaseLock releases the migration lock
-func (m *ClickHouseMigrator) ReleaseLock(ctx context.Context) error {
-	query := fmt.Sprintf("DELETE FROM schema_migration_locks WHERE app = '%s' AND locked_by = '%s'",
-		strings.ReplaceAll(m.AppName, "'", "''"),
-		strings.ReplaceAll(m.LockID, "'", "''"))
-
-	if err := m.ExecuteSQL(ctx, query); err != nil {
-		return fmt.Errorf("failed to release migration lock: %w", err)
-	}
-
-	fmt.Printf("✓ Released ClickHouse migration lock for app=%s\n", m.AppName)
+// Close is a no-op for HTTP client
+func (c *ClickHouse) Close() error {
 	return nil
-}
-
-// ApplyMigration applies a single migration
-func (m *ClickHouseMigrator) ApplyMigration(ctx context.Context, migration Migration) error {
-	numericName := ExtractNumericPrefix(migration.Name)
-
-	// Split content into individual statements
-	stmts := splitSQLStatements(migration.Content)
-	for _, stmt := range stmts {
-		trimmed := strings.TrimSpace(stmt)
-		if trimmed == "" {
-			continue
-		}
-
-		preview := trimmed
-		if nl := strings.IndexByte(preview, '\n'); nl >= 0 {
-			preview = preview[:nl]
-		}
-		if len(preview) > 120 {
-			preview = preview[:120] + "..."
-		}
-		fmt.Printf("Executing: %s\n", preview)
-		if err := m.ExecuteSQL(ctx, trimmed); err != nil {
-			return fmt.Errorf("failed to execute statement in %s: %w", migration.Name, err)
-		}
-	}
-
-	// Record migration as applied (app-scoped, numeric prefix only)
-	ins := fmt.Sprintf("INSERT INTO schema_migrations (app, name) VALUES ('%s', '%s')",
-		strings.ReplaceAll(m.AppName, "'", "''"),
-		strings.ReplaceAll(numericName, "'", "''"))
-	if err := m.ExecuteSQL(ctx, ins); err != nil {
-		return fmt.Errorf("failed to record applied migration %s: %w", migration.Name, err)
-	}
-	return nil
-}
-
-// splitSQLStatements splits SQL text into statements by ';' while removing comments
-func splitSQLStatements(sql string) []string {
-	// Remove CR to normalize newlines
-	s := strings.ReplaceAll(sql, "\r\n", "\n")
-	s = strings.ReplaceAll(s, "\r", "\n")
-	// Strip block comments /* ... */
-	for {
-		start := strings.Index(s, "/*")
-		if start < 0 {
-			break
-		}
-		end := strings.Index(s[start+2:], "*/")
-		if end < 0 {
-			s = s[:start]
-			break
-		}
-		s = s[:start] + s[start+2+end+2:]
-	}
-	// Strip line comments starting with -- until end of line
-	var b strings.Builder
-	for _, line := range strings.Split(s, "\n") {
-		t := strings.TrimSpace(line)
-		if strings.HasPrefix(t, "--") || t == "" {
-			continue
-		}
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
-	cleaned := b.String()
-	// Now split by ';'
-	raw := strings.Split(cleaned, ";")
-	var out []string
-	for _, part := range raw {
-		stmt := strings.TrimSpace(part)
-		if stmt == "" {
-			continue
-		}
-		out = append(out, stmt)
-	}
-	return out
 }
