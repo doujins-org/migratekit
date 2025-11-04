@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	lockTTL        = 5 * time.Minute
-	maxRetries     = 40
-	retryDelay     = 5 * time.Second
-	postgresDriver = "postgres"
+	lockTTL          = 5 * time.Minute
+	maxRetries       = 40
+	retryDelay       = 5 * time.Second
+	postgresDriver   = "postgres"
 	clickhouseDriver = "clickhouse"
 )
 
