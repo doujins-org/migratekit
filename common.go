@@ -22,9 +22,10 @@ type Migration struct {
 // prefix extracts numeric prefix from migration filenames and normalizes it.
 // Supports both underscore and hyphen separators.
 // Examples:
-//   "001_create_users.up.sql" -> "1"
-//   "1-create-users.up.sql"   -> "1"
-//   "0042_add_field.up.sql"   -> "42"
+//
+//	"001_create_users.up.sql" -> "1"
+//	"1-create-users.up.sql"   -> "1"
+//	"0042_add_field.up.sql"   -> "42"
 func prefix(name string) string {
 	name = strings.TrimSuffix(name, ".up.sql")
 	name = strings.TrimSuffix(name, ".down.sql")
