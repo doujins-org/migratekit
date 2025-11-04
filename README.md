@@ -10,25 +10,54 @@ go get github.com/doujins-org/migratekit
 
 ## Usage
 
-### PostgreSQL (Recommended - 3 lines)
+### PostgreSQL (Complete Example)
 
 ```go
-import "github.com/doujins-org/migratekit"
+package main
 
-db, _ := sql.Open("postgres", "...")
-m := migratekit.NewPostgres(db, "doujins", "pod-123")
+import (
+    "context"
+    "database/sql"
+    "embed"
 
-m.Setup(ctx)                        // Create tables (idempotent)
-m.ApplyMigrations(ctx, migrations)  // Apply all pending (locks only if needed)
+    "github.com/doujins-org/migratekit"
+    _ "github.com/lib/pq"
+)
+
+//go:embed migrations/postgres/*.sql
+var postgresFS embed.FS
+
+func main() {
+    ctx := context.Background()
+    db, _ := sql.Open("postgres", "postgres://...")
+
+    // Load migrations from embedded FS
+    migrations, _ := migratekit.LoadFromFS(postgresFS, "migrations/postgres")
+
+    // Run migrations (3 lines)
+    m := migratekit.NewPostgres(db, "doujins", "pod-123")
+    m.Setup(ctx)
+    m.ApplyMigrations(ctx, migrations)
+}
 ```
 
-### ClickHouse (Recommended - 3 lines)
+### ClickHouse (Complete Example)
 
 ```go
-m := migratekit.NewClickHouse(url, db, user, pass, "doujins", "pod-123")
+//go:embed migrations/clickhouse/*.sql
+var clickhouseFS embed.FS
 
-m.Setup(ctx)                        // Create tables (idempotent)
-m.ApplyMigrations(ctx, migrations)  // Apply all pending (locks only if needed)
+func main() {
+    ctx := context.Background()
+
+    // Load migrations from embedded FS
+    migrations, _ := migratekit.LoadFromFS(clickhouseFS, "migrations/clickhouse")
+
+    // Run migrations (3 lines)
+    m := migratekit.NewClickHouse(url, db, user, pass, "doujins", "pod-123")
+    m.Setup(ctx)
+    m.ApplyMigrations(ctx, migrations)
+}
 ```
 
 ### Advanced (Manual Control)
@@ -59,6 +88,7 @@ if len(toApply) > 0 {
 ## API
 
 ### Primary Methods
+- `LoadFromFS(fsys, dir)` - Load migrations from embedded filesystem
 - `NewPostgres(db, app, lockID)` - Create Postgres migrator
 - `NewClickHouse(url, db, user, pass, app, lockID)` - Create ClickHouse migrator
 - `Setup(ctx)` - Create migration tables (idempotent)
