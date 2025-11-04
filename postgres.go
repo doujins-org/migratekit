@@ -139,19 +139,18 @@ func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) 
 	// This runs outside the lock initially to allow concurrent readers
 	applied, err := p.Applied(ctx)
 	if err != nil {
-		// If migrations table doesn't exist, we need to set up and acquire lock
-		// to avoid race conditions when multiple processes try to create tables
+		// If migrations table doesn't exist, set up first (CREATE TABLE IF NOT EXISTS is safe for concurrent execution)
 		if strings.Contains(err.Error(), "does not exist") {
-			// Acquire lock before setup to prevent concurrent table creation
+			// Create the tables first using IF NOT EXISTS (safe for concurrent execution)
+			if err := p.Setup(ctx); err != nil {
+				return err
+			}
+
+			// Now acquire lock to apply migrations
 			if err := p.Lock(ctx); err != nil {
 				return err
 			}
 			defer p.Unlock(ctx)
-
-			// Now create the tables under lock
-			if err := p.Setup(ctx); err != nil {
-				return err
-			}
 
 			// After setup, check applied again (still under lock)
 			applied, err = p.Applied(ctx)
