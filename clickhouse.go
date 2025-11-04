@@ -222,7 +222,7 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 
 	sql := fmt.Sprintf("INSERT INTO schema_migrations (app, name) VALUES ('%s', '%s')",
 		strings.ReplaceAll(c.app, "'", "''"),
-		strings.ReplaceAll(prefix(m.Name), "'", "''"))
+		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
 	return c.exec(ctx, sql)
 }
 
@@ -237,7 +237,7 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 	// Filter to only unapplied migrations
 	var toApply []Migration
 	for _, mig := range migrations {
-		if !contains(applied, prefix(mig.Name)) {
+		if !contains(applied, Prefix(mig.Name)) {
 			toApply = append(toApply, mig)
 		}
 	}

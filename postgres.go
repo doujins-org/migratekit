@@ -123,7 +123,7 @@ func (p *Postgres) Apply(ctx context.Context, m Migration) error {
 
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO public.migrations (app, database, name) VALUES ($1, $2, $3)`,
-		p.app, postgresDriver, prefix(m.Name)); err != nil {
+		p.app, postgresDriver, Prefix(m.Name)); err != nil {
 		return err
 	}
 
@@ -141,7 +141,7 @@ func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) 
 	// Filter to only unapplied migrations
 	var toApply []Migration
 	for _, mig := range migrations {
-		if !contains(applied, prefix(mig.Name)) {
+		if !contains(applied, Prefix(mig.Name)) {
 			toApply = append(toApply, mig)
 		}
 	}

@@ -38,9 +38,9 @@ func TestPrefix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			result := prefix(tt.input)
+			result := Prefix(tt.input)
 			if result != tt.expected {
-				t.Errorf("prefix(%q) = %q, want %q", tt.input, result, tt.expected)
+				t.Errorf("Prefix(%q) = %q, want %q", tt.input, result, tt.expected)
 			}
 		})
 	}
