@@ -241,13 +241,13 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
 
-	var count uint64
-	if err := c.conn.QueryRow(ctx, checkSQL).Scan(&count); err != nil {
+	rows, err := c.query(ctx, checkSQL)
+	if err != nil {
 		return err
 	}
 
 	// If already recorded by another app, skip insertion
-	if count > 0 {
+	if len(rows) > 0 && rows[0] != "0" {
 		return nil
 	}
 
