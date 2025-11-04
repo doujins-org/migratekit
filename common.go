@@ -1,6 +1,10 @@
 package migratekit
 
 import (
+	"context"
+	"database/sql"
+	"embed"
+	"fmt"
 	"strings"
 	"time"
 )
@@ -101,4 +105,42 @@ func splitSQL(sql string) []string {
 		}
 	}
 	return out
+}
+
+// MigrationSource represents a migration source with an app name and embedded filesystem
+type MigrationSource struct {
+	App string
+	FS  embed.FS
+}
+
+// ValidatePostgresMigrations validates multiple Postgres migration sources at once.
+// Returns an error if any migrations are pending.
+func ValidatePostgresMigrations(ctx context.Context, db *sql.DB, sources ...MigrationSource) error {
+	for _, source := range sources {
+		migrations, err := LoadFromFS(source.FS, ".")
+		if err != nil {
+			return fmt.Errorf("failed to load %s migrations: %w", source.App, err)
+		}
+
+		migrator := NewPostgres(db, source.App, "validator")
+		if err := migrator.ValidateAllApplied(ctx, migrations); err != nil {
+			return fmt.Errorf("%s migrations not applied: %w", source.App, err)
+		}
+	}
+	return nil
+}
+
+// ValidateClickHouseMigrations validates ClickHouse migrations.
+// Returns an error if any migrations are pending.
+func ValidateClickHouseMigrations(ctx context.Context, serverURL, database, user, pass, app string, fs embed.FS) error {
+	migrations, err := LoadFromFS(fs, ".")
+	if err != nil {
+		return fmt.Errorf("failed to load %s migrations: %w", app, err)
+	}
+
+	migrator := NewClickHouse(serverURL, database, user, pass, app, "validator")
+	if err := migrator.ValidateAllApplied(ctx, migrations); err != nil {
+		return fmt.Errorf("%s migrations not applied: %w", app, err)
+	}
+	return nil
 }
