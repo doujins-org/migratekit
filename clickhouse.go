@@ -236,6 +236,21 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 		}
 	}
 
+	// Check if migration already recorded (handles concurrent migrations)
+	checkSQL := fmt.Sprintf("SELECT count(*) FROM schema_migrations WHERE app = '%s' AND name = '%s'",
+		strings.ReplaceAll(c.app, "'", "''"),
+		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
+
+	var count uint64
+	if err := c.conn.QueryRow(ctx, checkSQL).Scan(&count); err != nil {
+		return err
+	}
+
+	// If already recorded by another app, skip insertion
+	if count > 0 {
+		return nil
+	}
+
 	sql := fmt.Sprintf("INSERT INTO schema_migrations (app, name) VALUES ('%s', '%s')",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(Prefix(m.Name), "'", "''"))

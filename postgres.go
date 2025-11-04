@@ -123,7 +123,8 @@ func (p *Postgres) Apply(ctx context.Context, m Migration) error {
 	}
 
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO public.migrations (app, database, name) VALUES ($1, $2, $3)`,
+		`INSERT INTO public.migrations (app, database, name) VALUES ($1, $2, $3)
+		 ON CONFLICT (app, database, name) DO NOTHING`,
 		p.app, postgresDriver, Prefix(m.Name)); err != nil {
 		return err
 	}
