@@ -132,14 +132,53 @@ func (p *Postgres) Apply(ctx context.Context, m Migration) error {
 }
 
 // ApplyMigrations applies all unapplied migrations (only locks if needed)
+// Automatically calls Setup() to ensure migration tables exist before proceeding.
 func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) error {
-	// Check what's already applied (no lock needed)
+	// Ensure migration tables exist (must happen before checking applied migrations)
+	// This runs outside the lock initially to allow concurrent readers
 	applied, err := p.Applied(ctx)
 	if err != nil {
+		// If migrations table doesn't exist, we need to set up and acquire lock
+		// to avoid race conditions when multiple processes try to create tables
+		if strings.Contains(err.Error(), "does not exist") {
+			// Acquire lock before setup to prevent concurrent table creation
+			if err := p.Lock(ctx); err != nil {
+				return err
+			}
+			defer p.Unlock(ctx)
+
+			// Now create the tables under lock
+			if err := p.Setup(ctx); err != nil {
+				return err
+			}
+
+			// After setup, check applied again (still under lock)
+			applied, err = p.Applied(ctx)
+			if err != nil {
+				return err
+			}
+
+			// Filter to only unapplied migrations
+			var toApply []Migration
+			for _, mig := range migrations {
+				if !contains(applied, Prefix(mig.Name)) {
+					toApply = append(toApply, mig)
+				}
+			}
+
+			// Apply migrations (still under lock from setup)
+			for _, mig := range toApply {
+				if err := p.Apply(ctx, mig); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		}
 		return err
 	}
 
-	// Filter to only unapplied migrations
+	// Normal path: tables exist, check what needs to be applied
 	var toApply []Migration
 	for _, mig := range migrations {
 		if !contains(applied, Prefix(mig.Name)) {
