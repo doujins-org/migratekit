@@ -128,14 +128,39 @@ CREATE TABLE public.migration_locks (
 
 ## Migration Files
 
-Name migrations with numeric prefix:
+**Naming Convention**
+
+Files **must** follow this pattern: `{number}{separator}{description}.up.sql`
+
+- **Number**: Any positive integer (leading zeros optional: `1`, `01`, `001` all work)
+- **Separator**: Underscore `_` or hyphen `-`
+- **Suffix**: Must end with `.up.sql`
+
+✅ **Valid:**
 ```
 001_create_users.up.sql
-002_add_indexes.up.sql
-003_add_timestamps.up.sql
+1_create_users.up.sql
+01-add-indexes.up.sql
+42-add-timestamps.up.sql
+0003_migrations.up.sql
 ```
 
-Only the numeric prefix (`001`, `002`) is stored in the database.
+❌ **Invalid (will be skipped):**
+```
+001_create_users.sql        # Missing .up.sql
+create_users.up.sql         # Missing numeric prefix
+001.create.users.up.sql     # Invalid separator (use _ or -)
+```
+
+**Why `.up.sql` is required:**
+- Standard convention used by golang-migrate, bun, etc.
+- Reserves `.down.sql` for future rollback support
+- Prevents accidental execution of non-migration SQL files
+
+**What gets stored:**
+Numeric prefixes are normalized (leading zeros removed) before storage:
+- `001`, `01`, `1` all become `"1"`
+- `042`, `42` both become `"42"`
 
 ## Features
 

@@ -6,10 +6,10 @@ import (
 )
 
 const (
-	lockTTL        = 5 * time.Minute
-	maxRetries     = 40
-	retryDelay     = 5 * time.Second
-	postgresDriver = "postgres"
+	lockTTL          = 5 * time.Minute
+	maxRetries       = 40
+	retryDelay       = 5 * time.Second
+	postgresDriver   = "postgres"
 	clickhouseDriver = "clickhouse"
 )
 
@@ -19,14 +19,39 @@ type Migration struct {
 	Content string
 }
 
-// prefix extracts "001" from "001_create_users.up.sql"
+// prefix extracts numeric prefix from migration filenames and normalizes it.
+// Supports both underscore and hyphen separators.
+// Examples:
+//   "001_create_users.up.sql" -> "1"
+//   "1-create-users.up.sql"   -> "1"
+//   "0042_add_field.up.sql"   -> "42"
 func prefix(name string) string {
 	name = strings.TrimSuffix(name, ".up.sql")
 	name = strings.TrimSuffix(name, ".down.sql")
+
+	// Find separator (underscore or hyphen)
+	sepIdx := -1
 	if i := strings.IndexByte(name, '_'); i > 0 {
-		return name[:i]
+		sepIdx = i
+	} else if i := strings.IndexByte(name, '-'); i > 0 {
+		sepIdx = i
 	}
-	return name
+
+	var numericPart string
+	if sepIdx > 0 {
+		numericPart = name[:sepIdx]
+	} else {
+		numericPart = name
+	}
+
+	// Normalize by removing leading zeros
+	// "001" -> "1", "0042" -> "42", "1" -> "1"
+	normalized := strings.TrimLeft(numericPart, "0")
+	if normalized == "" {
+		// All zeros case: "000" -> "0"
+		return "0"
+	}
+	return normalized
 }
 
 // contains checks if a string is in a slice
