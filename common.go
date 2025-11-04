@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"embed"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -113,11 +114,21 @@ type MigrationSource struct {
 	FS  embed.FS
 }
 
+// DefaultLockID returns a default lock identifier based on hostname (or PID as fallback).
+// This is useful for preventing concurrent migrations from the same host.
+func DefaultLockID() string {
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "" {
+		return fmt.Sprintf("pid-%d", os.Getpid())
+	}
+	return hostname
+}
+
 // ValidatePostgresMigrations validates multiple Postgres migration sources at once.
 // Returns an error if any migrations are pending.
 func ValidatePostgresMigrations(ctx context.Context, db *sql.DB, sources ...MigrationSource) error {
 	for _, source := range sources {
-		migrations, err := LoadFromFS(source.FS, ".")
+		migrations, err := LoadFromFS(source.FS)
 		if err != nil {
 			return fmt.Errorf("failed to load %s migrations: %w", source.App, err)
 		}
@@ -132,15 +143,19 @@ func ValidatePostgresMigrations(ctx context.Context, db *sql.DB, sources ...Migr
 
 // ValidateClickHouseMigrations validates ClickHouse migrations.
 // Returns an error if any migrations are pending.
-func ValidateClickHouseMigrations(ctx context.Context, serverURL, database, user, pass, app string, fs embed.FS) error {
-	migrations, err := LoadFromFS(fs, ".")
+func ValidateClickHouseMigrations(ctx context.Context, config *ClickHouseConfig, fs embed.FS) error {
+	migrations, err := LoadFromFS(fs)
 	if err != nil {
-		return fmt.Errorf("failed to load %s migrations: %w", app, err)
+		return fmt.Errorf("failed to load %s migrations: %w", config.App, err)
 	}
 
-	migrator := NewClickHouse(serverURL, database, user, pass, app, "validator")
+	// Override LockID for validation
+	validatorConfig := *config
+	validatorConfig.LockID = "validator"
+
+	migrator := NewClickHouse(&validatorConfig)
 	if err := migrator.ValidateAllApplied(ctx, migrations); err != nil {
-		return fmt.Errorf("%s migrations not applied: %w", app, err)
+		return fmt.Errorf("%s migrations not applied: %w", config.App, err)
 	}
 	return nil
 }

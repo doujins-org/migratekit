@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+// ClickHouseConfig holds configuration for ClickHouse migrations
+type ClickHouseConfig struct {
+	ServerURL string
+	Database  string
+	Username  string
+	Password  string
+	App       string
+	LockID    string // Optional; uses DefaultLockID() if empty
+}
+
 // ClickHouse handles ClickHouse migrations via HTTP
 type ClickHouse struct {
 	client *http.Client
@@ -21,15 +31,21 @@ type ClickHouse struct {
 	lockID string
 }
 
-// NewClickHouse creates a ClickHouse migrator
-func NewClickHouse(serverURL, database, user, pass, app, lockID string) *ClickHouse {
+// NewClickHouse creates a ClickHouse migrator from config.
+// If config.LockID is empty, uses DefaultLockID().
+func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
+	lockID := config.LockID
+	if lockID == "" {
+		lockID = DefaultLockID()
+	}
+
 	return &ClickHouse{
 		client: &http.Client{Timeout: 30 * time.Second},
-		url:    strings.TrimSuffix(serverURL, "/"),
-		db:     database,
-		user:   user,
-		pass:   pass,
-		app:    app,
+		url:    strings.TrimSuffix(config.ServerURL, "/"),
+		db:     config.Database,
+		user:   config.Username,
+		pass:   config.Password,
+		app:    config.App,
 		lockID: lockID,
 	}
 }
