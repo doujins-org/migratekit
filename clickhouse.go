@@ -132,19 +132,25 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 		}
 	}
 
-	return c.exec(ctx, `
+	// Create schema_migrations table
+	if err := c.exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			app String,
 			name String,
 			migrated_at DateTime DEFAULT now()
-		) ENGINE = ReplacingMergeTree(migrated_at) ORDER BY (app, name);
+		) ENGINE = ReplacingMergeTree(migrated_at) ORDER BY (app, name)
+	`); err != nil {
+		return err
+	}
 
+	// Create schema_migration_locks table
+	return c.exec(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migration_locks (
 			app String,
 			locked_at DateTime DEFAULT now(),
 			locked_by String,
 			expires_at DateTime
-		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY app;
+		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY app
 	`)
 }
 
