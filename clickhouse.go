@@ -262,6 +262,44 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 	return nil
 }
 
+// ValidateAllApplied checks if all provided migrations have been applied.
+// Returns an error listing any pending migrations if validation fails.
+// This is intended for use during application startup to ensure the database
+// schema is up-to-date before the app starts serving requests.
+func (c *ClickHouse) ValidateAllApplied(ctx context.Context, migrations []Migration) error {
+	applied, err := c.Applied(ctx)
+	if err != nil {
+		// If query fails, assume table doesn't exist and no migrations applied
+		if strings.Contains(err.Error(), "doesn't exist") || strings.Contains(err.Error(), "Unknown table") {
+			if len(migrations) == 0 {
+				return nil // No migrations expected, validation passes
+			}
+			return fmt.Errorf("migration table does not exist - %d migrations need to be applied", len(migrations))
+		}
+		return fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	// Convert applied list to map for quick lookup
+	appliedMap := make(map[string]bool)
+	for _, name := range applied {
+		appliedMap[name] = true
+	}
+
+	// Check which migrations are pending
+	var pending []string
+	for _, mig := range migrations {
+		if !appliedMap[Prefix(mig.Name)] {
+			pending = append(pending, mig.Name)
+		}
+	}
+
+	if len(pending) > 0 {
+		return fmt.Errorf("%d pending migrations must be applied: %v", len(pending), pending)
+	}
+
+	return nil
+}
+
 // Close is a no-op for HTTP client
 func (c *ClickHouse) Close() error {
 	return nil

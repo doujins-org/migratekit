@@ -166,6 +166,44 @@ func (p *Postgres) ApplyMigrations(ctx context.Context, migrations []Migration) 
 	return nil
 }
 
+// ValidateAllApplied checks if all provided migrations have been applied.
+// Returns an error listing any pending migrations if validation fails.
+// This is intended for use during application startup to ensure the database
+// schema is up-to-date before the app starts serving requests.
+func (p *Postgres) ValidateAllApplied(ctx context.Context, migrations []Migration) error {
+	applied, err := p.Applied(ctx)
+	if err != nil {
+		// If the migrations table doesn't exist, no migrations have been applied
+		if strings.Contains(err.Error(), "does not exist") {
+			if len(migrations) == 0 {
+				return nil // No migrations expected, validation passes
+			}
+			return fmt.Errorf("migration table does not exist - %d migrations need to be applied", len(migrations))
+		}
+		return fmt.Errorf("failed to get applied migrations: %w", err)
+	}
+
+	// Convert applied list to map for quick lookup
+	appliedMap := make(map[string]bool)
+	for _, name := range applied {
+		appliedMap[name] = true
+	}
+
+	// Check which migrations are pending
+	var pending []string
+	for _, mig := range migrations {
+		if !appliedMap[Prefix(mig.Name)] {
+			pending = append(pending, mig.Name)
+		}
+	}
+
+	if len(pending) > 0 {
+		return fmt.Errorf("%d pending migrations must be applied: %v", len(pending), pending)
+	}
+
+	return nil
+}
+
 // Close closes the database connection
 func (p *Postgres) Close() error {
 	return p.db.Close()
