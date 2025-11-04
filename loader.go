@@ -21,7 +21,15 @@ func LoadFromFS(fsys fs.FS, dir string) ([]Migration, error) {
 			continue
 		}
 
-		path := dir + "/" + entry.Name()
+		// Construct path correctly for embed.FS
+		// embed.FS doesn't accept "./" prefix, so handle "." specially
+		var path string
+		if dir == "." {
+			path = entry.Name()
+		} else {
+			path = dir + "/" + entry.Name()
+		}
+
 		content, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", path, err)
