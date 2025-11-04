@@ -303,32 +303,47 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 		return err
 	}
 
-	// Normal path: tables exist, check what needs to be applied
-	var toApply []Migration
-	for _, mig := range migrations {
-		if !contains(applied, Prefix(mig.Name)) {
-			toApply = append(toApply, mig)
-		}
-	}
+    // Normal path: tables exist, check what needs to be applied
+    var toApply []Migration
+    for _, mig := range migrations {
+        if !contains(applied, Prefix(mig.Name)) {
+            toApply = append(toApply, mig)
+        }
+    }
 
-	if len(toApply) == 0 {
-		return nil // Nothing to do, no lock needed
-	}
+    if len(toApply) == 0 {
+        return nil // Nothing to do, no lock needed
+    }
 
-	// Acquire lock only when we have work to do
-	if err := c.Lock(ctx); err != nil {
-		return err
-	}
-	defer c.Unlock(ctx)
+    // Acquire lock only when we have work to do
+    if err := c.Lock(ctx); err != nil {
+        return err
+    }
+    defer c.Unlock(ctx)
 
-	// Apply migrations
-	for _, mig := range toApply {
-		if err := c.Apply(ctx, mig); err != nil {
-			return err
-		}
-	}
+    // Double-check under lock in case another process applied some since our first read
+    applied, err = c.Applied(ctx)
+    if err != nil {
+        return err
+    }
+    toApply = toApply[:0]
+    for _, mig := range migrations {
+        if !contains(applied, Prefix(mig.Name)) {
+            toApply = append(toApply, mig)
+        }
+    }
+    if len(toApply) == 0 {
+        return nil
+    }
 
-	return nil
+    // Apply migrations
+    for _, mig := range toApply {
+        if err := c.Apply(ctx, mig); err != nil {
+            return err
+        }
+    }
+
+    return nil
 }
 
 // ValidateAllApplied checks if all provided migrations have been applied.
