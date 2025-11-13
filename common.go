@@ -70,6 +70,42 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+// substituteTemplates replaces template variables in SQL with environment variable values.
+// Template format: {VAR_NAME} -> looks up os.Getenv("VAR_NAME")
+// Example: {CLICKHOUSE_PASSWORD} -> os.Getenv("CLICKHOUSE_PASSWORD")
+func substituteTemplates(sql string) string {
+	// Find all template variables: {VARIABLE_NAME}
+	result := sql
+	start := 0
+	for {
+		openIdx := strings.Index(result[start:], "{")
+		if openIdx == -1 {
+			break
+		}
+		openIdx += start
+
+		closeIdx := strings.Index(result[openIdx:], "}")
+		if closeIdx == -1 {
+			break
+		}
+		closeIdx += openIdx
+
+		// Extract variable name
+		varName := result[openIdx+1 : closeIdx]
+
+		// Get environment variable value
+		value := os.Getenv(varName)
+
+		// Replace template with value
+		result = result[:openIdx] + value + result[closeIdx+1:]
+
+		// Move start position forward
+		start = openIdx + len(value)
+	}
+
+	return result
+}
+
 // splitSQL splits SQL into statements, removing comments
 func splitSQL(sql string) []string {
 	sql = strings.ReplaceAll(sql, "\r\n", "\n")

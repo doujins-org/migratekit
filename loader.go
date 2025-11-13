@@ -40,9 +40,12 @@ func LoadFromFS(fsys fs.FS, dir ...string) ([]Migration, error) {
 			return nil, fmt.Errorf("read %s: %w", path, err)
 		}
 
+		// Apply template substitution to migration content
+		processedContent := substituteTemplates(string(content))
+
 		migrations = append(migrations, Migration{
 			Name:    entry.Name(),
-			Content: string(content),
+			Content: processedContent,
 		})
 	}
 

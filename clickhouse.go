@@ -391,6 +391,43 @@ func (c *ClickHouse) ValidateAllApplied(ctx context.Context, migrations []Migrat
 	return nil
 }
 
+// RunBootstrap executes bootstrap migrations without tracking them.
+// Bootstrap migrations create the database and user infrastructure needed
+// before regular migrations can run. They must use IF NOT EXISTS for idempotency.
+// The SQL is executed as the default ClickHouse user (no database context).
+func (c *ClickHouse) RunBootstrap(ctx context.Context, bootstrapSQL string) error {
+	// Execute without database context (using default user)
+	endpoint := c.url + "?wait_end_of_query=1"
+
+	// Split SQL into statements for execution
+	statements := splitSQL(bootstrapSQL)
+
+	for _, stmt := range statements {
+		req, err := http.NewRequestWithContext(ctx, "POST", endpoint, strings.NewReader(stmt))
+		if err != nil {
+			return fmt.Errorf("bootstrap: create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "text/plain")
+
+		// Bootstrap runs as default user (no auth)
+		// In production, this is run via kubectl exec which uses the default user
+		// In docker-compose, the default user has no password
+
+		resp, err := c.client.Do(req)
+		if err != nil {
+			return fmt.Errorf("bootstrap: execute: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("bootstrap: %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		}
+	}
+
+	return nil
+}
+
 // Close is a no-op for HTTP client
 func (c *ClickHouse) Close() error {
 	return nil
