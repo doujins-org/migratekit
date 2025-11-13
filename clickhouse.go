@@ -62,7 +62,7 @@ func (c *ClickHouse) exec(ctx context.Context, sql string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	if c.user != "" || c.pass != "" {
+	if c.user != "" && c.pass != "" {
 		req.SetBasicAuth(c.user, c.pass)
 	}
 
@@ -96,7 +96,7 @@ func (c *ClickHouse) query(ctx context.Context, sql string) ([]string, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "text/plain")
-	if c.user != "" || c.pass != "" {
+	if c.user != "" && c.pass != "" {
 		req.SetBasicAuth(c.user, c.pass)
 	}
 
@@ -135,7 +135,7 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 		req, _ := http.NewRequestWithContext(ctx, "POST", c.url,
 			strings.NewReader(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", c.db)))
 		req.Header.Set("Content-Type", "text/plain")
-		if c.user != "" || c.pass != "" {
+		if c.user != "" && c.pass != "" {
 			req.SetBasicAuth(c.user, c.pass)
 		}
 		resp, err := c.client.Do(req)
