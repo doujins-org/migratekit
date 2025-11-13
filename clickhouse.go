@@ -131,22 +131,9 @@ func (c *ClickHouse) query(ctx context.Context, sql string) ([]string, error) {
 
 // Setup ensures database and tables exist
 func (c *ClickHouse) Setup(ctx context.Context) error {
-	if c.db != "" {
-		req, _ := http.NewRequestWithContext(ctx, "POST", c.url,
-			strings.NewReader(fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", c.db)))
-		req.Header.Set("Content-Type", "text/plain")
-		if c.user != "" && c.pass != "" {
-			req.SetBasicAuth(c.user, c.pass)
-		}
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return err
-		}
-		resp.Body.Close()
-		if resp.StatusCode != 200 {
-			return fmt.Errorf("create database: %d", resp.StatusCode)
-		}
-	}
+	// NOTE: Database creation is handled by bootstrap migrations, not by migratekit.
+	// Bootstrap migrations run as default user with CREATE DATABASE permissions.
+	// App migrations run as analytics_user which only has permissions within the analytics database.
 
 	// Create schema_migrations table
 	if err := c.exec(ctx, `
