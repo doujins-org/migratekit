@@ -235,22 +235,6 @@ func (p *Postgres) ValidateAllApplied(ctx context.Context, migrations []Migratio
 	return nil
 }
 
-// RunBootstrap executes bootstrap migrations without tracking them.
-// Bootstrap migrations create schemas and extensions needed before
-// regular migrations can run. They must use IF NOT EXISTS for idempotency.
-func (p *Postgres) RunBootstrap(ctx context.Context, bootstrapSQL string) error {
-	// Split SQL into statements for execution
-	statements := splitSQL(bootstrapSQL)
-
-	for _, stmt := range statements {
-		if _, err := p.db.ExecContext(ctx, stmt); err != nil {
-			return fmt.Errorf("bootstrap: execute: %w", err)
-		}
-	}
-
-	return nil
-}
-
 // Close closes the database connection
 func (p *Postgres) Close() error {
 	return p.db.Close()
