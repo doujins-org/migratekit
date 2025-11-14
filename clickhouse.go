@@ -18,17 +18,19 @@ type ClickHouseConfig struct {
 	Password  string
 	App       string
 	LockID    string // Optional; uses DefaultLockID() if empty
+	Cluster   string // Optional; if specified, uses ON CLUSTER for DDL statements
 }
 
 // ClickHouse handles ClickHouse migrations via HTTP
 type ClickHouse struct {
-	client *http.Client
-	url    string
-	db     string
-	user   string
-	pass   string
-	app    string
-	lockID string
+	client  *http.Client
+	url     string
+	db      string
+	user    string
+	pass    string
+	app     string
+	lockID  string
+	cluster string // Optional cluster name for ON CLUSTER DDL
 }
 
 // NewClickHouse creates a ClickHouse migrator from config.
@@ -40,13 +42,14 @@ func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 	}
 
 	return &ClickHouse{
-		client: &http.Client{Timeout: 120 * time.Second},
-		url:    strings.TrimSuffix(config.ServerURL, "/"),
-		db:     config.Database,
-		user:   config.Username,
-		pass:   config.Password,
-		app:    config.App,
-		lockID: lockID,
+		client:  &http.Client{Timeout: 120 * time.Second},
+		url:     strings.TrimSuffix(config.ServerURL, "/"),
+		db:      config.Database,
+		user:    config.Username,
+		pass:    config.Password,
+		app:     config.App,
+		lockID:  lockID,
+		cluster: config.Cluster,
 	}
 }
 
@@ -135,29 +138,35 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 	// Bootstrap migrations run as default user with CREATE DATABASE permissions.
 	// App migrations run as analytics_user which only has permissions within the analytics database.
 
+	// Build ON CLUSTER clause if cluster is specified
+	onCluster := ""
+	if c.cluster != "" {
+		onCluster = " ON CLUSTER " + c.cluster
+	}
+
 	// Create migrations table
-	if err := c.exec(ctx, `
-		CREATE TABLE IF NOT EXISTS migrations (
-			app String,
-			name String,
-			migrated_at DateTime DEFAULT now()
-		) ENGINE = ReplacingMergeTree(migrated_at) ORDER BY (app, name)
-	`); err != nil {
+	createMigrationsSQL := `CREATE TABLE IF NOT EXISTS migrations` + onCluster + ` (
+		app String,
+		name String,
+		migrated_at DateTime DEFAULT now()
+	) ENGINE = ReplacingMergeTree(migrated_at) ORDER BY (app, name)`
+
+	if err := c.exec(ctx, createMigrationsSQL); err != nil {
 		return err
 	}
 
 	// Create migration_locks table
 	// Note: Uses a global lock (lock_name='global') so only ONE app can migrate at a time
 	// The 'app' field records which app acquired the lock (for debugging)
-	return c.exec(ctx, `
-		CREATE TABLE IF NOT EXISTS migration_locks (
-			lock_name String,
-			app String,
-			locked_at DateTime DEFAULT now(),
-			locked_by String,
-			expires_at DateTime
-		) ENGINE = ReplacingMergeTree(locked_at) ORDER BY lock_name
-	`)
+	createLocksSQL := `CREATE TABLE IF NOT EXISTS migration_locks` + onCluster + ` (
+		lock_name String,
+		app String,
+		locked_at DateTime DEFAULT now(),
+		locked_by String,
+		expires_at DateTime
+	) ENGINE = ReplacingMergeTree(locked_at) ORDER BY lock_name`
+
+	return c.exec(ctx, createLocksSQL)
 }
 
 // Applied returns list of applied migrations
