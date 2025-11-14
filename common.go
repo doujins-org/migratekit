@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	lockTTL          = 30 * time.Second
-	maxRetries       = 30
+	lockTTL          = 60 * time.Second
+	maxRetries       = 60
 	retryDelay       = 1 * time.Second
 	postgresDriver   = "postgres"
 	clickhouseDriver = "clickhouse"
