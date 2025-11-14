@@ -11,9 +11,9 @@ import (
 )
 
 const (
-	lockTTL          = 5 * time.Minute
-	maxRetries       = 40
-	retryDelay       = 5 * time.Second
+	lockTTL          = 30 * time.Second
+	maxRetries       = 30
+	retryDelay       = 1 * time.Second
 	postgresDriver   = "postgres"
 	clickhouseDriver = "clickhouse"
 )
@@ -70,9 +70,25 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
+// isValidEnvVarName checks if a string is a valid environment variable name.
+// Valid names contain only uppercase letters, digits, and underscores.
+// This prevents substituting SQL constructs like '{}' for empty arrays.
+func isValidEnvVarName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, ch := range name {
+		if !(ch >= 'A' && ch <= 'Z') && !(ch >= '0' && ch <= '9') && ch != '_' {
+			return false
+		}
+	}
+	return true
+}
+
 // substituteTemplates replaces template variables in SQL with environment variable values.
 // Template format: {VAR_NAME} -> looks up os.Getenv("VAR_NAME")
 // Example: {CLICKHOUSE_PASSWORD} -> os.Getenv("CLICKHOUSE_PASSWORD")
+// Only substitutes valid environment variable names (uppercase, digits, underscores).
 func substituteTemplates(sql string) string {
 	// Find all template variables: {VARIABLE_NAME}
 	result := sql
@@ -92,6 +108,14 @@ func substituteTemplates(sql string) string {
 
 		// Extract variable name
 		varName := result[openIdx+1 : closeIdx]
+
+		// Only substitute if varName looks like an environment variable
+		// This avoids substituting SQL constructs like '{}' for empty arrays
+		if !isValidEnvVarName(varName) {
+			// Skip this one, move past the closing brace
+			start = closeIdx + 1
+			continue
+		}
 
 		// Get environment variable value
 		value := os.Getenv(varName)

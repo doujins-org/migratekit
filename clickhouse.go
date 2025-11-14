@@ -40,7 +40,7 @@ func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 	}
 
 	return &ClickHouse{
-		client: &http.Client{Timeout: 30 * time.Second},
+		client: &http.Client{Timeout: 120 * time.Second},
 		url:    strings.TrimSuffix(config.ServerURL, "/"),
 		db:     config.Database,
 		user:   config.Username,
@@ -171,13 +171,14 @@ func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
 	return rows, nil
 }
 
-// Lock acquires a global database-wide migration lock
-// All apps share the same lock (lock_name='global') to prevent concurrent migrations
+// Lock acquires a per-app migration lock
+// Each app has its own lock (lock_name=app) to allow parallel migrations across different apps
 func (c *ClickHouse) Lock(ctx context.Context) error {
 	for i := 0; i < maxRetries; i++ {
-		// Check global lock (not per-app)
-		sql := `SELECT app, locked_by, expires_at FROM migration_locks
-			WHERE lock_name = 'global' ORDER BY locked_at DESC LIMIT 1`
+		// Check per-app lock
+		sql := fmt.Sprintf(`SELECT app, locked_by, expires_at FROM migration_locks
+			WHERE lock_name = '%s' ORDER BY locked_at DESC LIMIT 1`,
+			strings.ReplaceAll(c.app, "'", "''"))
 		rows, _ := c.query(ctx, sql)
 
 		canAcquire := len(rows) == 0
@@ -192,9 +193,10 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 		}
 
 		if canAcquire {
-			// Acquire global lock, but record which app acquired it
+			// Acquire per-app lock
 			sql := fmt.Sprintf(`INSERT INTO migration_locks (lock_name, app, locked_by, locked_at, expires_at)
-				VALUES ('global', '%s', '%s', now(), '%s')`,
+				VALUES ('%s', '%s', '%s', now(), '%s')`,
+				strings.ReplaceAll(c.app, "'", "''"),
 				strings.ReplaceAll(c.app, "'", "''"),
 				strings.ReplaceAll(c.lockID, "'", "''"),
 				time.Now().Add(lockTTL).Format("2006-01-02 15:04:05"))
@@ -213,10 +215,11 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 	return fmt.Errorf("lock timeout")
 }
 
-// Unlock releases the global lock
+// Unlock releases the per-app lock
 func (c *ClickHouse) Unlock(ctx context.Context) error {
-	// Delete global lock where this app/lockID acquired it
-	sql := fmt.Sprintf("DELETE FROM migration_locks WHERE lock_name = 'global' AND app = '%s' AND locked_by = '%s'",
+	// Delete per-app lock where this app/lockID acquired it
+	sql := fmt.Sprintf("DELETE FROM migration_locks WHERE lock_name = '%s' AND app = '%s' AND locked_by = '%s'",
+		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(c.lockID, "'", "''"))
 	return c.exec(ctx, sql)
