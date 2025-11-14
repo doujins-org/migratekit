@@ -135,9 +135,9 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 	// Bootstrap migrations run as default user with CREATE DATABASE permissions.
 	// App migrations run as analytics_user which only has permissions within the analytics database.
 
-	// Create schema_migrations table
+	// Create migrations table
 	if err := c.exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
+		CREATE TABLE IF NOT EXISTS migrations (
 			app String,
 			name String,
 			migrated_at DateTime DEFAULT now()
@@ -146,11 +146,11 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 		return err
 	}
 
-	// Create schema_migration_locks table
+	// Create migration_locks table
 	// Note: Uses a global lock (lock_name='global') so only ONE app can migrate at a time
 	// The 'app' field records which app acquired the lock (for debugging)
 	return c.exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migration_locks (
+		CREATE TABLE IF NOT EXISTS migration_locks (
 			lock_name String,
 			app String,
 			locked_at DateTime DEFAULT now(),
@@ -162,7 +162,7 @@ func (c *ClickHouse) Setup(ctx context.Context) error {
 
 // Applied returns list of applied migrations
 func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
-	sql := fmt.Sprintf("SELECT name FROM schema_migrations WHERE app = '%s' ORDER BY name",
+	sql := fmt.Sprintf("SELECT name FROM migrations WHERE app = '%s' ORDER BY name",
 		strings.ReplaceAll(c.app, "'", "''"))
 	rows, err := c.query(ctx, sql)
 	if err != nil {
@@ -176,7 +176,7 @@ func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
 func (c *ClickHouse) Lock(ctx context.Context) error {
 	for i := 0; i < maxRetries; i++ {
 		// Check global lock (not per-app)
-		sql := `SELECT app, locked_by, expires_at FROM schema_migration_locks
+		sql := `SELECT app, locked_by, expires_at FROM migration_locks
 			WHERE lock_name = 'global' ORDER BY locked_at DESC LIMIT 1`
 		rows, _ := c.query(ctx, sql)
 
@@ -193,7 +193,7 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 
 		if canAcquire {
 			// Acquire global lock, but record which app acquired it
-			sql := fmt.Sprintf(`INSERT INTO schema_migration_locks (lock_name, app, locked_by, locked_at, expires_at)
+			sql := fmt.Sprintf(`INSERT INTO migration_locks (lock_name, app, locked_by, locked_at, expires_at)
 				VALUES ('global', '%s', '%s', now(), '%s')`,
 				strings.ReplaceAll(c.app, "'", "''"),
 				strings.ReplaceAll(c.lockID, "'", "''"),
@@ -216,7 +216,7 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 // Unlock releases the global lock
 func (c *ClickHouse) Unlock(ctx context.Context) error {
 	// Delete global lock where this app/lockID acquired it
-	sql := fmt.Sprintf("DELETE FROM schema_migration_locks WHERE lock_name = 'global' AND app = '%s' AND locked_by = '%s'",
+	sql := fmt.Sprintf("DELETE FROM migration_locks WHERE lock_name = 'global' AND app = '%s' AND locked_by = '%s'",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(c.lockID, "'", "''"))
 	return c.exec(ctx, sql)
@@ -231,7 +231,7 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 	}
 
 	// Check if migration already recorded (handles concurrent migrations)
-	checkSQL := fmt.Sprintf("SELECT count(*) FROM schema_migrations WHERE app = '%s' AND name = '%s'",
+	checkSQL := fmt.Sprintf("SELECT count(*) FROM migrations WHERE app = '%s' AND name = '%s'",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
 
@@ -245,7 +245,7 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 		return nil
 	}
 
-	sql := fmt.Sprintf("INSERT INTO schema_migrations (app, name) VALUES ('%s', '%s')",
+	sql := fmt.Sprintf("INSERT INTO migrations (app, name) VALUES ('%s', '%s')",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
 	return c.exec(ctx, sql)
