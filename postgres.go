@@ -12,9 +12,6 @@ const (
 	// across all apps. This ensures only one migration process runs at a time,
 	// preventing race conditions when multiple services start simultaneously.
 	globalMigrationLockKey = 7592348109 // Arbitrary constant
-
-	// postgresDriver identifies PostgreSQL as the database driver/type
-	postgresDriver = "postgres"
 )
 
 // Postgres handles PostgreSQL migrations
