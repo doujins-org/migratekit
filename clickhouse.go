@@ -234,7 +234,18 @@ func (c *ClickHouse) Unlock(ctx context.Context) error {
 
 // Apply applies a migration
 func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
-	for _, stmt := range splitSQL(m.Content) {
+	// Inject ON_CLUSTER template variable for user migrations
+	// This allows migrations to use {{ON_CLUSTER}} which expands to " ON CLUSTER xxx" or empty string
+	content := m.Content
+	if c.cluster != "" {
+		content = strings.ReplaceAll(content, "{{ON_CLUSTER}}", " ON CLUSTER "+c.cluster)
+		content = strings.ReplaceAll(content, "${ON_CLUSTER}", " ON CLUSTER "+c.cluster)
+	} else {
+		content = strings.ReplaceAll(content, "{{ON_CLUSTER}}", "")
+		content = strings.ReplaceAll(content, "${ON_CLUSTER}", "")
+	}
+
+	for _, stmt := range splitSQL(content) {
 		if err := c.exec(ctx, stmt); err != nil {
 			return err
 		}
