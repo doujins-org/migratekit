@@ -70,50 +70,57 @@ func contains(slice []string, item string) bool {
 	return false
 }
 
-// isValidEnvVarName checks if a string is a valid environment variable name.
-// Valid names contain only uppercase letters, digits, and underscores.
-// This prevents substituting SQL constructs like '{}' for empty arrays.
-func isValidEnvVarName(name string) bool {
-	if name == "" {
-		return false
-	}
-	for _, ch := range name {
-		if !(ch >= 'A' && ch <= 'Z') && !(ch >= '0' && ch <= '9') && ch != '_' {
-			return false
-		}
-	}
-	return true
-}
-
 // substituteTemplates replaces template variables in SQL with environment variable values.
-// Template format: {VAR_NAME} -> looks up os.Getenv("VAR_NAME")
-// Example: {CLICKHOUSE_PASSWORD} -> os.Getenv("CLICKHOUSE_PASSWORD")
-// Only substitutes valid environment variable names (uppercase, digits, underscores).
+// Supports two template formats:
+//   - {{VAR_NAME}} (Handlebars/Mustache style)
+//   - ${VAR_NAME} (Shell/JS template literal style)
+//
+// Empty templates like ${} or {{}} are skipped (no substitution).
+// Example: {{CLICKHOUSE_PASSWORD}} -> os.Getenv("CLICKHOUSE_PASSWORD")
 func substituteTemplates(sql string) string {
-	// Find all template variables: {VARIABLE_NAME}
 	result := sql
 	start := 0
-	for {
-		openIdx := strings.Index(result[start:], "{")
-		if openIdx == -1 {
-			break
-		}
-		openIdx += start
 
-		closeIdx := strings.Index(result[openIdx:], "}")
-		if closeIdx == -1 {
+	for start < len(result) {
+		// Look for both template styles
+		dollarIdx := strings.Index(result[start:], "${")
+		braceIdx := strings.Index(result[start:], "{{")
+
+		// Determine which comes first (or if neither exists)
+		var openIdx, closeIdx int
+		var openLen, closeLen int
+
+		if dollarIdx >= 0 && (braceIdx < 0 || dollarIdx < braceIdx) {
+			// ${VAR} style
+			openIdx = start + dollarIdx
+			closeIdx = strings.Index(result[openIdx+2:], "}")
+			if closeIdx < 0 {
+				break
+			}
+			closeIdx += openIdx + 2
+			openLen = 2
+			closeLen = 1
+		} else if braceIdx >= 0 {
+			// {{VAR}} style
+			openIdx = start + braceIdx
+			closeIdx = strings.Index(result[openIdx+2:], "}}")
+			if closeIdx < 0 {
+				break
+			}
+			closeIdx += openIdx + 2
+			openLen = 2
+			closeLen = 2
+		} else {
+			// No more templates found
 			break
 		}
-		closeIdx += openIdx
 
 		// Extract variable name
-		varName := result[openIdx+1 : closeIdx]
+		varName := result[openIdx+openLen : closeIdx]
 
-		// Only substitute if varName looks like an environment variable
-		// This avoids substituting SQL constructs like '{}' for empty arrays
-		if !isValidEnvVarName(varName) {
-			// Skip this one, move past the closing brace
-			start = closeIdx + 1
+		// Skip empty templates like ${} or {{}}
+		if varName == "" {
+			start = closeIdx + closeLen
 			continue
 		}
 
@@ -121,7 +128,7 @@ func substituteTemplates(sql string) string {
 		value := os.Getenv(varName)
 
 		// Replace template with value
-		result = result[:openIdx] + value + result[closeIdx+1:]
+		result = result[:openIdx] + value + result[closeIdx+closeLen:]
 
 		// Move start position forward
 		start = openIdx + len(value)
