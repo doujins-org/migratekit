@@ -233,7 +233,21 @@ func (c *ClickHouse) Unlock(ctx context.Context) error {
 	return c.exec(ctx, sql)
 }
 
-// Apply applies a migration
+// isTransientError checks if an error is likely due to distributed DDL propagation delays
+func isTransientError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Errors indicating table/view hasn't propagated yet across cluster nodes
+	return strings.Contains(errStr, "UNKNOWN_TABLE") ||
+		strings.Contains(errStr, "Unknown table") ||
+		strings.Contains(errStr, "doesn't exist") ||
+		strings.Contains(errStr, "does not exist") ||
+		strings.Contains(errStr, "Table") && strings.Contains(errStr, "doesn't exist")
+}
+
+// Apply applies a migration with exponential backoff retry for transient errors
 func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 	// Inject ON_CLUSTER template variable for user migrations
 	// This allows migrations to use {{ON_CLUSTER}} which expands to " ON CLUSTER xxx" or empty string
@@ -246,9 +260,40 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 		content = strings.ReplaceAll(content, "${ON_CLUSTER}", "")
 	}
 
+	// Execute statements with retry logic for transient errors
+	// Snuba retries up to 30s for synchronization issues
+	const maxRetryDuration = 30 * time.Second
 	for _, stmt := range splitSQL(content) {
-		if err := c.exec(ctx, stmt); err != nil {
-			return err
+		startTime := time.Now()
+		backoff := 1 * time.Second
+
+		for {
+			err := c.exec(ctx, stmt)
+			if err == nil {
+				break // Success
+			}
+
+			// Check if this is a transient error worth retrying
+			if !isTransientError(err) {
+				return err // Permanent error, don't retry
+			}
+
+			// Check if we've exceeded total retry duration
+			if time.Since(startTime) >= maxRetryDuration {
+				return fmt.Errorf("migration failed after %v of retries: %w", maxRetryDuration, err)
+			}
+
+			// Wait with exponential backoff (1s, 2s, 4s, 8s, 16s)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(backoff):
+			}
+
+			backoff *= 2
+			if backoff > 16*time.Second {
+				backoff = 16 * time.Second // Cap at 16 seconds
+			}
 		}
 	}
 
@@ -307,15 +352,10 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 				}
 			}
 
-			// Apply migrations (still under lock from setup) with delay for DDL propagation
-			for i, mig := range toApply {
+			// Apply migrations (still under lock from setup)
+			for _, mig := range toApply {
 				if err := c.Apply(ctx, mig); err != nil {
 					return err
-				}
-
-				// Wait 3 seconds between migrations to allow distributed DDL to propagate
-				if i < len(toApply)-1 {
-					time.Sleep(3 * time.Second)
 				}
 			}
 
@@ -357,17 +397,10 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
         return nil
     }
 
-    // Apply migrations with delay between each for distributed DDL propagation
-    for i, mig := range toApply {
+    // Apply migrations (retry logic handled within Apply() method)
+    for _, mig := range toApply {
         if err := c.Apply(ctx, mig); err != nil {
             return err
-        }
-
-        // Wait 3 seconds between migrations to allow distributed DDL to propagate
-        // ON CLUSTER DDL is synchronous, but there's a small window where tables
-        // might not be immediately queryable on all nodes (especially for views)
-        if i < len(toApply)-1 { // Don't sleep after last migration
-            time.Sleep(3 * time.Second)
         }
     }
 
