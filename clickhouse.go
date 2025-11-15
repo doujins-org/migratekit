@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"time"
 
@@ -187,13 +188,26 @@ func (c *ClickHouse) queryNative(ctx context.Context, sql string) ([]string, err
 	}
 	defer rows.Close()
 
+	// Get column metadata for proper type handling
+	columnTypes := rows.ColumnTypes()
+
+	// Create properly-typed variables using reflection
+	vars := make([]any, len(columnTypes))
+	for i := range columnTypes {
+		vars[i] = reflect.New(columnTypes[i].ScanType()).Interface()
+	}
+
 	var out []string
 	for rows.Next() {
-		var val interface{}
-		if err := rows.Scan(&val); err != nil {
+		// Scan into properly-typed variables
+		if err := rows.Scan(vars...); err != nil {
 			return nil, err
 		}
-		out = append(out, fmt.Sprintf("%v", val))
+		// Convert each value to string
+		for _, v := range vars {
+			// Dereference the pointer and convert to string
+			out = append(out, fmt.Sprintf("%v", reflect.ValueOf(v).Elem().Interface()))
+		}
 	}
 	return out, rows.Err()
 }
@@ -423,7 +437,7 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 	}
 
 	// Check if migration already recorded (handles concurrent migrations)
-	checkSQL := fmt.Sprintf("SELECT count(*) FROM migrations WHERE app = '%s' AND name = '%s'",
+	checkSQL := fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM migrations WHERE app = '%s' AND name = '%s')",
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(Prefix(m.Name), "'", "''"))
 
