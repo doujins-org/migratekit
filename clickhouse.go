@@ -8,6 +8,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/ClickHouse/clickhouse-go/v2/lib/driver"
 )
 
 func min(a, b int) int {
@@ -19,19 +22,27 @@ func min(a, b int) int {
 
 // ClickHouseConfig holds configuration for ClickHouse migrations
 type ClickHouseConfig struct {
-	ServerURL string
-	Database  string
-	Username  string
-	Password  string
-	App       string
-	LockID    string // Optional; uses DefaultLockID() if empty
-	Cluster   string // Optional; if specified, uses ON CLUSTER for DDL statements
+	HTTPAddr   string // HTTP URL (e.g., http://clickhouse:8123)
+	NativeAddr string // Optional: Native protocol address (e.g., clickhouse:9000). Preferred when available.
+	Database   string
+	Username   string
+	Password   string
+	App        string
+	LockID     string // Optional; uses DefaultLockID() if empty
+	Cluster    string // Optional; if specified, uses ON CLUSTER for DDL statements
 }
 
-// ClickHouse handles ClickHouse migrations via HTTP
+// ClickHouse handles ClickHouse migrations via HTTP or native protocol
 type ClickHouse struct {
-	client  *http.Client
-	url     string
+	// HTTP fields
+	client *http.Client
+	url    string
+
+	// Native protocol fields
+	nativeConn driver.Conn // ClickHouse native connection
+	useNative  bool
+
+	// Common fields
 	db      string
 	user    string
 	pass    string
@@ -42,15 +53,14 @@ type ClickHouse struct {
 
 // NewClickHouse creates a ClickHouse migrator from config.
 // If config.LockID is empty, uses DefaultLockID().
+// Prefers native protocol (NativeAddr) over HTTP (ServerURL) when available.
 func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 	lockID := config.LockID
 	if lockID == "" {
 		lockID = DefaultLockID()
 	}
 
-	return &ClickHouse{
-		client:  &http.Client{Timeout: 120 * time.Second},
-		url:     strings.TrimSuffix(config.ServerURL, "/"),
+	ch := &ClickHouse{
 		db:      config.Database,
 		user:    config.Username,
 		pass:    config.Password,
@@ -58,9 +68,21 @@ func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 		lockID:  lockID,
 		cluster: config.Cluster,
 	}
+
+	// Prefer native protocol when available
+	if config.NativeAddr != "" {
+		ch.useNative = true
+		ch.url = config.NativeAddr // Store native address in url field
+	} else {
+		ch.useNative = false
+		ch.client = &http.Client{Timeout: 120 * time.Second}
+		ch.url = strings.TrimSuffix(config.HTTPAddr, "/")
+	}
+
+	return ch
 }
 
-// exec executes SQL
+// exec executes SQL using either native protocol or HTTP
 func (c *ClickHouse) exec(ctx context.Context, sql string) error {
 	// Debug: log SQL being executed
 	preview := sql
@@ -69,6 +91,39 @@ func (c *ClickHouse) exec(ctx context.Context, sql string) error {
 	}
 	fmt.Printf("[DEBUG] Executing SQL: %s\n", preview)
 
+	if c.useNative {
+		return c.execNative(ctx, sql)
+	}
+	return c.execHTTP(ctx, sql)
+}
+
+// execNative executes SQL via native protocol
+func (c *ClickHouse) execNative(ctx context.Context, sql string) error {
+	// Lazy connect on first use
+	if c.nativeConn == nil {
+		conn, err := clickhouse.Open(&clickhouse.Options{
+			Addr: []string{c.url},
+			Auth: clickhouse.Auth{
+				Database: c.db,
+				Username: c.user,
+				Password: c.pass,
+			},
+			DialTimeout: 30 * time.Second,
+			Compression: &clickhouse.Compression{
+				Method: clickhouse.CompressionLZ4,
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to connect to ClickHouse: %w", err)
+		}
+		c.nativeConn = conn
+	}
+
+	return c.nativeConn.Exec(ctx, sql)
+}
+
+// execHTTP executes SQL via HTTP interface
+func (c *ClickHouse) execHTTP(ctx context.Context, sql string) error {
 	endpoint := c.url + "?wait_end_of_query=1"
 	if c.db != "" {
 		endpoint += "&database=" + url.QueryEscape(c.db)
@@ -96,8 +151,55 @@ func (c *ClickHouse) exec(ctx context.Context, sql string) error {
 	return nil
 }
 
-// query returns first column as strings
+// query returns first column as strings using either native protocol or HTTP
 func (c *ClickHouse) query(ctx context.Context, sql string) ([]string, error) {
+	if c.useNative {
+		return c.queryNative(ctx, sql)
+	}
+	return c.queryHTTP(ctx, sql)
+}
+
+// queryNative queries via native protocol
+func (c *ClickHouse) queryNative(ctx context.Context, sql string) ([]string, error) {
+	// Lazy connect on first use
+	if c.nativeConn == nil {
+		conn, err := clickhouse.Open(&clickhouse.Options{
+			Addr: []string{c.url},
+			Auth: clickhouse.Auth{
+				Database: c.db,
+				Username: c.user,
+				Password: c.pass,
+			},
+			DialTimeout: 30 * time.Second,
+			Compression: &clickhouse.Compression{
+				Method: clickhouse.CompressionLZ4,
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to connect to ClickHouse: %w", err)
+		}
+		c.nativeConn = conn
+	}
+
+	rows, err := c.nativeConn.Query(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []string
+	for rows.Next() {
+		var val string
+		if err := rows.Scan(&val); err != nil {
+			return nil, err
+		}
+		out = append(out, val)
+	}
+	return out, rows.Err()
+}
+
+// queryHTTP queries via HTTP interface
+func (c *ClickHouse) queryHTTP(ctx context.Context, sql string) ([]string, error) {
 	endpoint := c.url + "?wait_end_of_query=1"
 	if c.db != "" {
 		endpoint += "&database=" + url.QueryEscape(c.db)
@@ -468,7 +570,10 @@ func (c *ClickHouse) ValidateAllApplied(ctx context.Context, migrations []Migrat
 	return nil
 }
 
-// Close is a no-op for HTTP client
+// Close closes the connection (relevant for native protocol)
 func (c *ClickHouse) Close() error {
+	if c.useNative && c.nativeConn != nil {
+		return c.nativeConn.Close()
+	}
 	return nil
 }
