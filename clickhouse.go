@@ -62,6 +62,13 @@ func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 
 // exec executes SQL
 func (c *ClickHouse) exec(ctx context.Context, sql string) error {
+	// Debug: log SQL being executed
+	preview := sql
+	if len(preview) > 300 {
+		preview = preview[:300] + "..."
+	}
+	fmt.Printf("[DEBUG] Executing SQL: %s\n", preview)
+
 	endpoint := c.url + "?wait_end_of_query=1"
 	if c.db != "" {
 		endpoint += "&database=" + url.QueryEscape(c.db)
