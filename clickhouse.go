@@ -184,6 +184,7 @@ func (c *ClickHouse) Applied(ctx context.Context) ([]string, error) {
 // All apps share the same lock (lock_name='global') to prevent concurrent ClickHouse migrations
 // This is necessary because ON CLUSTER operations modify distributed DDL queue across all nodes
 func (c *ClickHouse) Lock(ctx context.Context) error {
+	maxRetries := int(lockAcquireTimeout / lockRetryInterval)
 	for i := 0; i < maxRetries; i++ {
 		// Check global lock (not per-app)
 		sql := `SELECT app, locked_by, expires_at FROM migration_locks
@@ -217,7 +218,7 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(retryDelay):
+		case <-time.After(lockRetryInterval):
 		}
 	}
 	return fmt.Errorf("lock timeout")
@@ -306,10 +307,15 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 				}
 			}
 
-			// Apply migrations (still under lock from setup)
-			for _, mig := range toApply {
+			// Apply migrations (still under lock from setup) with delay for DDL propagation
+			for i, mig := range toApply {
 				if err := c.Apply(ctx, mig); err != nil {
 					return err
+				}
+
+				// Wait 3 seconds between migrations to allow distributed DDL to propagate
+				if i < len(toApply)-1 {
+					time.Sleep(3 * time.Second)
 				}
 			}
 
@@ -351,10 +357,17 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
         return nil
     }
 
-    // Apply migrations
-    for _, mig := range toApply {
+    // Apply migrations with delay between each for distributed DDL propagation
+    for i, mig := range toApply {
         if err := c.Apply(ctx, mig); err != nil {
             return err
+        }
+
+        // Wait 3 seconds between migrations to allow distributed DDL to propagate
+        // ON CLUSTER DDL is synchronous, but there's a small window where tables
+        // might not be immediately queryable on all nodes (especially for views)
+        if i < len(toApply)-1 { // Don't sleep after last migration
+            time.Sleep(3 * time.Second)
         }
     }
 

@@ -11,11 +11,11 @@ import (
 )
 
 const (
-	lockTTL          = 60 * time.Second
-	maxRetries       = 90 // Wait 90 seconds total (longer than lockTTL to allow locks to expire)
-	retryDelay       = 1 * time.Second
-	postgresDriver   = "postgres"
-	clickhouseDriver = "clickhouse"
+	lockTTL            = 60 * time.Second
+	lockAcquireTimeout = 90 * time.Second // Wait up to 90s to acquire lock (longer than lockTTL)
+	lockRetryInterval  = 1 * time.Second  // Check for lock availability every 1 second
+	postgresDriver     = "postgres"
+	clickhouseDriver   = "clickhouse"
 )
 
 // Migration is a single SQL migration
