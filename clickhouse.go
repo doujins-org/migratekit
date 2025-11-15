@@ -112,10 +112,6 @@ func (c *ClickHouse) execNative(ctx context.Context, sql string) error {
 			Compression: &clickhouse.Compression{
 				Method: clickhouse.CompressionLZ4,
 			},
-			// Disable connection pooling to ensure all migration statements
-			// use the same connection to the same pod (critical for ON CLUSTER DDL)
-			MaxOpenConns: 1,
-			MaxIdleConns: 1,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to connect to ClickHouse: %w", err)
@@ -178,10 +174,6 @@ func (c *ClickHouse) queryNative(ctx context.Context, sql string) ([]string, err
 			Compression: &clickhouse.Compression{
 				Method: clickhouse.CompressionLZ4,
 			},
-			// Disable connection pooling to ensure all migration statements
-			// use the same connection to the same pod (critical for ON CLUSTER DDL)
-			MaxOpenConns: 1,
-			MaxIdleConns: 1,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to connect to ClickHouse: %w", err)
@@ -197,12 +189,11 @@ func (c *ClickHouse) queryNative(ctx context.Context, sql string) ([]string, err
 
 	var out []string
 	for rows.Next() {
-		// Use interface{} to handle any type, then convert to string
-		var val interface{}
+		var val string
 		if err := rows.Scan(&val); err != nil {
 			return nil, err
 		}
-		out = append(out, fmt.Sprintf("%v", val))
+		out = append(out, val)
 	}
 	return out, rows.Err()
 }
