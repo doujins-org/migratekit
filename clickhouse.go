@@ -10,6 +10,13 @@ import (
 	"time"
 )
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // ClickHouseConfig holds configuration for ClickHouse migrations
 type ClickHouseConfig struct {
 	ServerURL string
@@ -255,9 +262,18 @@ func (c *ClickHouse) Apply(ctx context.Context, m Migration) error {
 	if c.cluster != "" {
 		content = strings.ReplaceAll(content, "{{ON_CLUSTER}}", " ON CLUSTER "+c.cluster)
 		content = strings.ReplaceAll(content, "${ON_CLUSTER}", " ON CLUSTER "+c.cluster)
+		// Debug: log first CREATE TABLE statement to verify substitution
+		if strings.Contains(content, "CREATE TABLE") {
+			firstCreate := content[strings.Index(content, "CREATE TABLE"):]
+			if idx := strings.Index(firstCreate[20:], "\n\n"); idx > 0 {
+				firstCreate = firstCreate[:20+idx]
+			}
+			fmt.Printf("[DEBUG] Sample SQL after ON_CLUSTER substitution: %s...\n", firstCreate[:min(200, len(firstCreate))])
+		}
 	} else {
 		content = strings.ReplaceAll(content, "{{ON_CLUSTER}}", "")
 		content = strings.ReplaceAll(content, "${ON_CLUSTER}", "")
+		fmt.Printf("[DEBUG] No cluster configured, removing ON_CLUSTER placeholders\n")
 	}
 
 	// Execute statements with retry logic for transient errors
