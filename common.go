@@ -12,7 +12,7 @@ import (
 
 const (
 	lockTTL          = 60 * time.Second
-	maxRetries       = 60
+	maxRetries       = 90 // Wait 90 seconds total (longer than lockTTL to allow locks to expire)
 	retryDelay       = 1 * time.Second
 	postgresDriver   = "postgres"
 	clickhouseDriver = "clickhouse"
