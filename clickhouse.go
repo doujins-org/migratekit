@@ -189,11 +189,11 @@ func (c *ClickHouse) queryNative(ctx context.Context, sql string) ([]string, err
 
 	var out []string
 	for rows.Next() {
-		var val string
+		var val interface{}
 		if err := rows.Scan(&val); err != nil {
 			return nil, err
 		}
-		out = append(out, val)
+		out = append(out, fmt.Sprintf("%v", val))
 	}
 	return out, rows.Err()
 }
