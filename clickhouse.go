@@ -20,13 +20,13 @@ func min(a, b int) int {
 
 // ClickHouseConfig holds configuration for ClickHouse migrations
 type ClickHouseConfig struct {
-	Addr     string // Native protocol address (e.g., clickhouse:9000)
-	Database string
-	Username string
-	Password string
-	App      string
-	LockID   string // Optional; uses DefaultLockID() if empty
-	Cluster  string // Optional; if specified, uses ON CLUSTER for DDL statements
+	ClientAddr string // Native protocol address (e.g., clickhouse:9000)
+	Database   string
+	Username   string
+	Password   string
+	App        string
+	LockID     string // Optional; uses DefaultLockID() if empty
+	Cluster    string // Optional; if specified, uses ON CLUSTER for DDL statements
 }
 
 // ClickHouse handles ClickHouse migrations via native protocol
@@ -51,7 +51,7 @@ func NewClickHouse(config *ClickHouseConfig) *ClickHouse {
 	}
 
 	return &ClickHouse{
-		addr:    config.Addr,
+		addr:    config.ClientAddr,
 		db:      config.Database,
 		user:    config.Username,
 		pass:    config.Password,
