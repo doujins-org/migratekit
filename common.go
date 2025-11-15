@@ -124,6 +124,15 @@ func substituteTemplates(sql string) string {
 			continue
 		}
 
+		// Special-case: leave ON_CLUSTER placeholders intact.
+		// These are handled later by ClickHouse.Apply based on ClickHouseConfig.Cluster.
+		if varName == "ON_CLUSTER" {
+			// Skip over this placeholder without substituting so that
+			// ClickHouse.Apply can expand {{ON_CLUSTER}} or ${ON_CLUSTER}.
+			start = closeIdx + closeLen
+			continue
+		}
+
 		// Get environment variable value
 		value := os.Getenv(varName)
 

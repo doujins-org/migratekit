@@ -94,7 +94,9 @@ func (p *Postgres) Apply(ctx context.Context, m Migration) error {
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, m.Content); err != nil {
+	// Apply template substitution (environment variables) at execution time
+	sql := substituteTemplates(m.Content)
+	if _, err := tx.ExecContext(ctx, sql); err != nil {
 		return err
 	}
 
