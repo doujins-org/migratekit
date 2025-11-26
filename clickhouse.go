@@ -351,7 +351,8 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 	applied, err := c.Applied(ctx)
 	if err != nil {
 		// If migrations table doesn't exist, set up first (CREATE TABLE IF NOT EXISTS is safe for concurrent execution)
-		if strings.Contains(err.Error(), "doesn't exist") || strings.Contains(err.Error(), "UNKNOWN_TABLE") {
+		errLower := strings.ToLower(err.Error())
+		if strings.Contains(errLower, "doesn't exist") || strings.Contains(errLower, "unknown table") || strings.Contains(errLower, "unknown_table") {
 			// Create the tables first using IF NOT EXISTS (safe for concurrent execution)
 			if err := c.Setup(ctx); err != nil {
 				return err
@@ -440,7 +441,8 @@ func (c *ClickHouse) ValidateAllApplied(ctx context.Context, migrations []Migrat
 	applied, err := c.Applied(ctx)
 	if err != nil {
 		// If query fails, assume table doesn't exist and no migrations applied
-		if strings.Contains(err.Error(), "doesn't exist") || strings.Contains(err.Error(), "Unknown table") {
+		errLower := strings.ToLower(err.Error())
+		if strings.Contains(errLower, "doesn't exist") || strings.Contains(errLower, "unknown table") || strings.Contains(errLower, "unknown_table") {
 			if len(migrations) == 0 {
 				return nil // No migrations expected, validation passes
 			}
