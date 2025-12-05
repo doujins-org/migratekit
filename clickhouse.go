@@ -205,13 +205,9 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 		rows, _ := c.query(ctx, sql)
 
 		canAcquire := len(rows) == 0
-		if len(rows) > 0 {
-			parts := strings.Split(rows[0], "\t")
-			// parts[0] = app, parts[1] = locked_by, parts[2] = expires_at
-			if len(parts) >= 3 {
-				if t, err := time.Parse("2006-01-02 15:04:05", parts[2]); err == nil && time.Now().After(t) {
-					canAcquire = true
-				}
+		if len(rows) >= 3 {
+			if lockExpired(rows[:3], time.Now()) {
+				canAcquire = true
 			}
 		}
 
@@ -221,7 +217,7 @@ func (c *ClickHouse) Lock(ctx context.Context) error {
 				VALUES ('global', '%s', '%s', now(), '%s')`,
 				strings.ReplaceAll(c.app, "'", "''"),
 				strings.ReplaceAll(c.lockID, "'", "''"),
-				time.Now().Add(lockTTL).Format("2006-01-02 15:04:05"))
+				time.Now().Add(lockTTL).Format(clickhouseTimeLayout))
 			if err := c.exec(ctx, sql); err != nil {
 				return err
 			}
@@ -244,6 +240,19 @@ func (c *ClickHouse) Unlock(ctx context.Context) error {
 		strings.ReplaceAll(c.app, "'", "''"),
 		strings.ReplaceAll(c.lockID, "'", "''"))
 	return c.exec(ctx, sql)
+}
+
+// lockExpired determines whether the provided lock row (app, locked_by, expires_at)
+// has passed its expiration time.
+func lockExpired(row []string, now time.Time) bool {
+	if len(row) < 3 {
+		return false
+	}
+	expiresAt, err := time.Parse(clickhouseTimeLayout, row[2])
+	if err != nil {
+		return false
+	}
+	return now.After(expiresAt)
 }
 
 // isTransientError checks if an error is likely due to distributed DDL propagation delays
@@ -354,12 +363,12 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 		errLower := strings.ToLower(err.Error())
 		if strings.Contains(errLower, "doesn't exist") || strings.Contains(errLower, "unknown table") || strings.Contains(errLower, "unknown_table") {
 			// Create the tables first using IF NOT EXISTS (safe for concurrent execution)
-			if err := c.Setup(ctx); err != nil {
+			if err = c.Setup(ctx); err != nil {
 				return err
 			}
 
 			// Now acquire lock to apply migrations
-			if err := c.Lock(ctx); err != nil {
+			if err = c.Lock(ctx); err != nil {
 				return err
 			}
 			defer c.Unlock(ctx)
@@ -380,7 +389,7 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 
 			// Apply migrations (still under lock from setup)
 			for _, mig := range toApply {
-				if err := c.Apply(ctx, mig); err != nil {
+				if err = c.Apply(ctx, mig); err != nil {
 					return err
 				}
 			}
@@ -390,47 +399,47 @@ func (c *ClickHouse) ApplyMigrations(ctx context.Context, migrations []Migration
 		return err
 	}
 
-    // Normal path: tables exist, check what needs to be applied
-    var toApply []Migration
-    for _, mig := range migrations {
-        if !contains(applied, Prefix(mig.Name)) {
-            toApply = append(toApply, mig)
-        }
-    }
+	// Normal path: tables exist, check what needs to be applied
+	var toApply []Migration
+	for _, mig := range migrations {
+		if !contains(applied, Prefix(mig.Name)) {
+			toApply = append(toApply, mig)
+		}
+	}
 
-    if len(toApply) == 0 {
-        return nil // Nothing to do, no lock needed
-    }
+	if len(toApply) == 0 {
+		return nil // Nothing to do, no lock needed
+	}
 
-    // Acquire lock only when we have work to do
-    if err := c.Lock(ctx); err != nil {
-        return err
-    }
-    defer c.Unlock(ctx)
+	// Acquire lock only when we have work to do
+	if err = c.Lock(ctx); err != nil {
+		return err
+	}
+	defer c.Unlock(ctx)
 
-    // Double-check under lock in case another process applied some since our first read
-    applied, err = c.Applied(ctx)
-    if err != nil {
-        return err
-    }
-    toApply = toApply[:0]
-    for _, mig := range migrations {
-        if !contains(applied, Prefix(mig.Name)) {
-            toApply = append(toApply, mig)
-        }
-    }
-    if len(toApply) == 0 {
-        return nil
-    }
+	// Double-check under lock in case another process applied some since our first read
+	applied, err = c.Applied(ctx)
+	if err != nil {
+		return err
+	}
+	toApply = toApply[:0]
+	for _, mig := range migrations {
+		if !contains(applied, Prefix(mig.Name)) {
+			toApply = append(toApply, mig)
+		}
+	}
+	if len(toApply) == 0 {
+		return nil
+	}
 
-    // Apply migrations (retry logic handled within Apply() method)
-    for _, mig := range toApply {
-        if err := c.Apply(ctx, mig); err != nil {
-            return err
-        }
-    }
+	// Apply migrations (retry logic handled within Apply() method)
+	for _, mig := range toApply {
+		if err := c.Apply(ctx, mig); err != nil {
+			return err
+		}
+	}
 
-    return nil
+	return nil
 }
 
 // ValidateAllApplied checks if all provided migrations have been applied.
